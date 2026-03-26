@@ -72,8 +72,8 @@ client.on('message', async msg => {
         else if (cmd === '/nee') response = cmdNee(whatsappId, args);
         else if (cmd === '/wachtlijst') response = cmdWachtlijst();
         else if (cmd === '/teams') response = cmdTeams();
-        else if (cmd === '/witwon') response = cmdWin(whatsappId, 'wit');
-        else if (cmd === '/zwartwon') response = cmdWin(whatsappId, 'zwart');
+        else if (cmd === '/witwon') response = cmdWin('wit', args);
+        else if (cmd === '/zwartwon') response = cmdWin('zwart', args);
         else if (cmd === '/mvp') response = cmdMvp(whatsappId, args);
         else if (cmd === '/mvps') response = cmdMvps();
         else if (cmd === '/lijst') response = cmdLijst();
@@ -207,30 +207,30 @@ function cmdHelp() {
 📋 Match Info:
 /status - Toon match + wie ingeschreven is
 /wachtlijst - Toon wachtlijst
-/teams - Genereer teams (bij 10x /ja)
+/teams - Genereer teams (bij 10 spelers)
 /wedstrijden - Laatste 20 wedstrijden
 /lijst - Alle spelers + winrate
 
 ✅ Inschrijven:
-/ja - Schrijf jezelf in (via je nummer)
-/ja <naam> - Schrijf speler <naam> in
-/kan - Misschien (jezelf)
-/kan <naam> - Misschien (speler <naam>)
+/ja - Schrijf jezelf in
+/ja <naam> - Schrijf speler in (linkt je nummer)
+/kan - Misschien (telt mee voor 10!)
 /nee - Schrijf jezelf uit
-/nee <naam> - Schrijf speler <naam> uit
+/nee <naam> - Schrijf speler uit
 
 🎮 Match Acties:
-/play <dag> <uur> - Nieuwe match aanmaken
-/edit <tijd> - Wijzig match tijd (bijv: /edit 20u30)
-/cancel - Annuleer huidige match
-/witwon of /zwartwon - Resultaat ingeven
+/play <dag> <uur> - Nieuwe match (bijv: /play vrijdag 22u)
+/edit <tijd> - Wijzig tijd (bijv: /edit 20u30)
+/cancel - Annuleer match
+/witwon [score] - Wit won (bijv: /witwon 4-0)
+/zwartwon [score] - Zwart won (bijv: /zwartwon 2-1)
 /mvp <naam> - Stem voor MVP
 /mvps - MVP leaderboard
 
-⚙️ Profiel:
-/addspeler <naam> <positie> - Voeg speler toe (K/V/M/A)
-/positie <positie> - Stel je positie in
-/whoami - Test je WhatsApp link
+⚙️ Spelers:
+/addspeler <naam> <positie> - Voeg toe (K/V/M/A)
+/positie <pos> - Stel je positie in
+/whoami - Test je link
 /help - Dit bericht`;
 }
 
@@ -292,17 +292,24 @@ function cmdSignup(whatsappId, state, args) {
     if (!m) throw new Error('Geen actieve match.');
 
     let player;
+    let linkMessage = '';
 
     if (args.length > 0) {
-        // Naam meegegeven - zoek of maak aan (zoals app.js)
+        // Naam meegegeven - zoek of maak aan
         const name = args.join(' ');
-        player = ensurePlayerByName(name, 1); // is_guest=1 voor nieuwe spelers
+        player = ensurePlayerByName(name, 1);
+
+        // Link WhatsApp ID aan speler als nog niet gelinkt
+        if (!player.whatsapp_id) {
+            db.prepare(`UPDATE players SET whatsapp_id = ? WHERE id = ?`).run(whatsappId, player.id);
+            linkMessage = `\n🔗 ${player.display_name} is nu gelinkt aan je WhatsApp!`;
+        }
     } else {
         // Geen naam - zoek via WhatsApp ID
         player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
 
         if (!player) {
-            throw new Error('Je WhatsApp nummer is nog niet gelinkt aan een speler.\n\nGebruik: /ja <jouw naam>');
+            throw new Error('Je WhatsApp nummer is nog niet gelinkt.\n\nGebruik: /ja <jouw naam>');
         }
     }
 
@@ -310,23 +317,21 @@ function cmdSignup(whatsappId, state, args) {
       SELECT * FROM match_players WHERE match_id = ? AND player_id = ?
     `).get(m.id, player.id);
 
-    const yesCount = countYes(m.id);
+    // Tel totaal (ja + kan) voor de limiet check
+    const totalCount = countTotal(m.id);
 
     if (existing) {
       if (existing.signup_state === state && existing.is_waitlist === 0) {
-        return `✅ ${player.display_name} staat al als "${state}".`;
+        return `✅ ${player.display_name} staat al als "${state}".` + linkMessage + '\n\n' + cmdStatus();
       }
 
-      // Update
-      if (state === 'ja' && yesCount >= m.player_limit && existing.is_waitlist === 0) {
-        // Verplaats naar wachtlijst
-        const waitPos = getNextWaitlistPosition(m.id);
+      // Wijzig van ja→kan of kan→ja maar check limiet
+      if (totalCount >= m.player_limit && existing.is_waitlist === 1) {
+        // Was op wachtlijst, blijft op wachtlijst
         db.prepare(`
-          UPDATE match_players
-          SET signup_state = ?, is_waitlist = 1, waitlist_position = ?
-          WHERE match_id = ? AND player_id = ?
-        `).run(state, waitPos, m.id, player.id);
-        return `⏳ ${player.display_name} op wachtlijst (#${waitPos}). Match vol (${yesCount}/${m.player_limit}).`;
+          UPDATE match_players SET signup_state = ? WHERE match_id = ? AND player_id = ?
+        `).run(state, m.id, player.id);
+        return `⏳ ${player.display_name} → *${state}* (wachtlijst)` + linkMessage + '\n\n' + cmdStatus();
       }
 
       db.prepare(`
@@ -335,18 +340,17 @@ function cmdSignup(whatsappId, state, args) {
         WHERE match_id = ? AND player_id = ?
       `).run(state, m.id, player.id);
 
-      const newCount = countYes(m.id);
-      return `✅ ${player.display_name} → *${state}* (${newCount}/${m.player_limit})`;
+      return buildSignupResult(m, player, state, linkMessage);
     }
 
-    // New signup
-    if (state === 'ja' && yesCount >= m.player_limit) {
+    // Nieuwe signup - check of match vol is (ja + kan >= limit)
+    if (totalCount >= m.player_limit) {
       const waitPos = getNextWaitlistPosition(m.id);
       db.prepare(`
         INSERT INTO match_players (match_id, player_id, signup_state, joined_at, is_waitlist, waitlist_position)
         VALUES (?, ?, ?, ?, 1, ?)
       `).run(m.id, player.id, state, nowMs(), waitPos);
-      return `⏳ ${player.display_name} op wachtlijst (#${waitPos}). Match vol (${yesCount}/${m.player_limit}).`;
+      return `⏳ ${player.display_name} op wachtlijst (#${waitPos}). Match vol!${linkMessage}\n\n` + cmdStatus();
     }
 
     db.prepare(`
@@ -354,8 +358,46 @@ function cmdSignup(whatsappId, state, args) {
       VALUES (?, ?, ?, ?, 0)
     `).run(m.id, player.id, state, nowMs());
 
-    const newCount = countYes(m.id);
-    return `✅ ${player.display_name} → *${state}* (${newCount}/${m.player_limit})`;
+    return buildSignupResult(m, player, state, linkMessage);
+}
+
+function buildSignupResult(match, player, state, linkMessage) {
+    const total = countTotal(match.id);
+    let result = `✅ ${player.display_name} → *${state}*${linkMessage}\n\n`;
+
+    // Auto teams bij 10 spelers
+    if (total === match.player_limit) {
+        result += '🎉 *We zijn met 10! Teams worden gemaakt...*\n\n';
+        result += generateAndSaveTeams(match.id);
+    } else {
+        result += cmdStatus();
+    }
+
+    return result;
+}
+
+function generateAndSaveTeams(matchId) {
+    const rows = db.prepare(`
+      SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position
+      FROM match_players mp
+      JOIN players p ON p.id = mp.player_id
+      WHERE mp.match_id = ? AND mp.is_waitlist = 0
+      ORDER BY mp.joined_at ASC
+    `).all(matchId);
+
+    if (rows.length !== 10) {
+        return `❌ Kan geen teams maken: ${rows.length} spelers (10 nodig).`;
+    }
+
+    const { teamWit, teamZwart } = generateBalancedTeams(rows);
+
+    // Save teams
+    db.prepare(`UPDATE match_players SET team = NULL WHERE match_id = ?`).run(matchId);
+    const upd = db.prepare(`UPDATE match_players SET team = ? WHERE match_id = ? AND player_id = ?`);
+    for (const p of teamWit) upd.run('wit', matchId, p.player_id);
+    for (const p of teamZwart) upd.run('zwart', matchId, p.player_id);
+
+    return formatTeams(matchId);
 }
 
 function getNextWaitlistPosition(matchId) {
@@ -372,15 +414,15 @@ function cmdNee(whatsappId, args) {
     let player;
 
     if (args.length > 0) {
-        // Naam meegegeven - zoek of maak aan (zoals app.js)
+        // Naam meegegeven - zoek of maak aan
         const name = args.join(' ');
-        player = ensurePlayerByName(name, 1); // is_guest=1 voor nieuwe spelers
+        player = ensurePlayerByName(name, 1);
     } else {
         // Geen naam - zoek via WhatsApp ID
         player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
 
         if (!player) {
-            throw new Error('Je WhatsApp nummer is nog niet gelinkt aan een speler.\n\nGebruik: /nee <naam>');
+            throw new Error('Je WhatsApp nummer is nog niet gelinkt.\n\nGebruik: /nee <naam>');
         }
     }
 
@@ -389,7 +431,7 @@ function cmdNee(whatsappId, args) {
     `).get(m.id, player.id);
 
     if (!existing) {
-      return `ℹ️ ${player.display_name} stond niet ingeschreven.`;
+      return `ℹ️ ${player.display_name} stond niet ingeschreven.\n\n` + cmdStatus();
     }
 
     const wasOnWaitlist = existing.is_waitlist === 1;
@@ -417,12 +459,11 @@ function cmdNee(whatsappId, args) {
           WHERE match_id = ? AND player_id = ?
         `).run(m.id, firstWaitlist.player_id);
 
-        result += `\n✅ ${firstWaitlist.display_name} gepromoveerd van wachtlijst!`;
+        result += `\n🎉 ${firstWaitlist.display_name} gepromoveerd van wachtlijst!`;
       }
     }
 
-    const newCount = countYes(m.id);
-    return `${result}\n📊 Nieuwe stand: ${newCount}/${m.player_limit}`;
+    return result + '\n\n' + cmdStatus();
 }
 
 function cmdWachtlijst() {
@@ -637,22 +678,9 @@ function calcWilsonStdDev(team) {
   return Math.sqrt(variance);
 }
 
-function cmdWin(whatsappId, team) {
+function cmdWin(team, args) {
     const m = getActiveMatch();
     if (!m) throw new Error('Geen actieve match.');
-
-    const player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
-    if (!player) {
-        throw new Error('Je WhatsApp nummer is nog niet gelinkt aan een speler.');
-    }
-
-    const wasinMatch = db.prepare(`
-      SELECT * FROM match_players WHERE match_id = ? AND player_id = ? AND is_waitlist = 0
-    `).get(m.id, player.id);
-
-    if (!wasinMatch) {
-      throw new Error('Je kan alleen resultaat ingeven als je zelf in de match zat.');
-    }
 
     const wit = db.prepare(`
       SELECT player_id FROM match_players WHERE match_id = ? AND team = 'wit'
@@ -666,6 +694,21 @@ function cmdWin(whatsappId, team) {
       throw new Error('Teams zijn nog niet gegenereerd. Gebruik eerst /teams.');
     }
 
+    // Check of er al een resultaat is
+    const existingRes = db.prepare(`SELECT * FROM match_results WHERE match_id = ?`).get(m.id);
+    if (existingRes) {
+      throw new Error('Resultaat is al ingevoerd voor deze match.');
+    }
+
+    // Parse score (bijv. "4-0" of "2-1")
+    let score = null;
+    if (args.length > 0) {
+      const scoreArg = args.join('').trim();
+      if (/^\d+-\d+$/.test(scoreArg)) {
+        score = scoreArg;
+      }
+    }
+
     const winners = team === 'wit' ? wit : zwart;
     const losers = team === 'wit' ? zwart : wit;
 
@@ -676,11 +719,20 @@ function cmdWin(whatsappId, team) {
       for (const l of losers) {
         db.prepare(`UPDATE players SET games = games + 1 WHERE id = ?`).run(l.player_id);
       }
+
+      // Sla resultaat op
+      db.prepare(`
+        INSERT INTO match_results (match_id, winner_team, score, decided_at)
+        VALUES (?, ?, ?, ?)
+      `).run(m.id, team, score, nowMs());
+
       db.prepare(`UPDATE matches SET status = 'closed' WHERE id = ?`).run(m.id);
     });
     tx();
 
-    return `🏆 *Team ${team.charAt(0).toUpperCase() + team.slice(1)} heeft gewonnen!*\n\nStem nu voor MVP: /mvp <naam>`;
+    const teamLabel = team.charAt(0).toUpperCase() + team.slice(1);
+    const scoreText = score ? ` met *${score}*` : '';
+    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\nStem nu voor MVP: /mvp <naam>`;
 }
 
 function cmdMvp(whatsappId, args) {
@@ -788,13 +840,19 @@ function cmdLijst() {
       SELECT display_name, position, wins, games
       FROM players
       WHERE games > 0
-      ORDER BY games DESC, wins DESC
-      LIMIT 30
     `).all();
 
     if (rows.length === 0) {
       return 'ℹ️ Nog geen spelers met wedstrijden.';
     }
+
+    // Sorteer op % (hoog→laag), dan op wins (hoog→laag)
+    rows.sort((a, b) => {
+      const pctA = a.wins / a.games;
+      const pctB = b.wins / b.games;
+      if (pctA !== pctB) return pctB - pctA; // Hoger % eerst
+      return b.wins - a.wins; // Meer wins eerst
+    });
 
     const posLabel = (pos) => {
       if (!pos) return '';
@@ -806,9 +864,8 @@ function cmdLijst() {
     };
 
     const lines = ['📊 *Spelers Ranking:*', ''];
-    rows.forEach((r, i) => {
-      const wilson = wilsonScore(r);
-      const pct = r.games > 0 ? ((r.wins / r.games) * 100).toFixed(0) : '0';
+    rows.slice(0, 30).forEach((r, i) => {
+      const pct = ((r.wins / r.games) * 100).toFixed(0);
       lines.push(`${i + 1}. ${r.display_name}${posLabel(r.position)} — ${pct}% (${r.wins}W/${r.games}G)`);
     });
 
