@@ -69,6 +69,11 @@ client.on('message', async msg => {
     const [cmdRaw, ...args] = text.split(' ');
     const cmd = cmdRaw.toLowerCase();
 
+    console.log(`🎯 Command parsing:`);
+    console.log(`   Raw text: "${text}"`);
+    console.log(`   Command: "${cmd}"`);
+    console.log(`   Args: [${args.map(a => `"${a}"`).join(', ')}]`);
+
     let response = null;
 
     try {
