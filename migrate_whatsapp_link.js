@@ -5,19 +5,19 @@ const db = new Database('voetbal.db');
 console.log('=== WhatsApp Link Migratie ===\n');
 
 try {
-  // Voeg whatsapp_id kolom toe
+  // Voeg whatsapp_id kolom toe (zonder UNIQUE constraint bij ALTER TABLE)
   db.exec(`
-    ALTER TABLE players ADD COLUMN whatsapp_id TEXT UNIQUE;
+    ALTER TABLE players ADD COLUMN whatsapp_id TEXT;
   `);
 
   console.log('✅ Kolom "whatsapp_id" toegevoegd aan players table');
 
-  // Maak index voor snellere lookups
+  // Maak UNIQUE index voor snellere lookups én uniekheid garanderen
   db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_players_whatsapp_id ON players(whatsapp_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_players_whatsapp_id ON players(whatsapp_id) WHERE whatsapp_id IS NOT NULL;
   `);
 
-  console.log('✅ Index aangemaakt voor whatsapp_id');
+  console.log('✅ Unique index aangemaakt voor whatsapp_id');
 
 } catch (err) {
   if (err.message.includes('duplicate column name')) {
