@@ -297,12 +297,20 @@ function cmdSignup(whatsappId, state, args) {
     if (args.length > 0) {
         // Naam meegegeven - zoek of maak aan
         const name = args.join(' ');
+
+        // Check eerst of dit whatsapp_id al gelinkt is
+        const existingLink = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
+
         player = ensurePlayerByName(name, 1);
 
-        // Link WhatsApp ID aan speler als nog niet gelinkt
-        if (!player.whatsapp_id) {
-            db.prepare(`UPDATE players SET whatsapp_id = ? WHERE id = ?`).run(whatsappId, player.id);
-            linkMessage = `\n🔗 ${player.display_name} is nu gelinkt aan je WhatsApp!`;
+        // Link alleen als dit whatsapp nummer nog niet gelinkt is
+        if (!existingLink) {
+            // Check of deze speler al een ander whatsapp_id heeft
+            const currentPlayer = db.prepare(`SELECT * FROM players WHERE id = ?`).get(player.id);
+            if (!currentPlayer.whatsapp_id) {
+                db.prepare(`UPDATE players SET whatsapp_id = ? WHERE id = ?`).run(whatsappId, player.id);
+                linkMessage = `\n🔗 ${player.display_name} is nu gelinkt aan je WhatsApp!`;
+            }
         }
     } else {
         // Geen naam - zoek via WhatsApp ID
