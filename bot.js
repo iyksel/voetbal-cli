@@ -40,9 +40,13 @@ client.on('ready', () => {
 });
 
 client.on('message', async msg => {
+    console.log("=== DEBUG MESSAGE ===");
     console.log("GROUP ID:", msg.from);
     console.log("TEXT:", msg.body);
-    console.log("TEXT:", msg.author);
+    console.log("AUTHOR:", msg.author);
+    console.log("NOTIFY NAME:", msg._data.notifyName);
+    console.log("FROM:", msg.from);
+    console.log("=====================");
 
     // Auto-detect groep ID als nog niet ingesteld
     if (!CONFIG.WHATSAPP_GROUP_ID && msg.from.endsWith('@g.us')) {
@@ -56,6 +60,8 @@ client.on('message', async msg => {
     const text = msg.body.trim();
     const userName = msg._data.notifyName || 'Onbekend';
     const whatsappId = msg.author || msg.from; // msg.author voor groepen, msg.from voor privé
+
+    console.log(`📱 WhatsApp ID gebruikt: ${whatsappId}`);
 
     // Alleen commands
     if (!text.startsWith('/')) return;
@@ -85,6 +91,7 @@ client.on('message', async msg => {
         else if (cmd === '/cancel') response = cmdCancel();
         else if (cmd === '/help') response = cmdHelp();
         else if (cmd === '/whoami') response = cmdWhoAmI(whatsappId);
+        else if (cmd === '/debug') response = cmdDebug(whatsappId);
     } catch (err) {
         response = `❌ ${err.message}`;
     }
@@ -231,6 +238,7 @@ function cmdHelp() {
 /addspeler <naam> <positie> - Voeg toe (K/V/M/A)
 /positie <pos> - Stel je positie in
 /whoami - Test je link
+/debug - Debug linking info
 /help - Dit bericht`;
 }
 
@@ -1190,13 +1198,38 @@ function cmdWhoAmI(whatsappId) {
     const player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
 
     if (!player) {
-        return `❌ Je WhatsApp is nog niet gelinkt.\n\nGebruik: /ja <jouw naam> om te linken\nOf vraag een admin om je handmatig te linken.`;
+        return `❌ Je WhatsApp is nog niet gelinkt.\nWhatsApp ID: \`${whatsappId}\`\n\nGebruik: /ja <jouw naam> om te linken`;
     }
 
     const posLabel = player.position ? ` [${player.position}]` : '';
     const wilson = player.games > 0 ? `${(wilsonScore(player) * 100).toFixed(1)}%` : 'Geen games';
 
-    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson} - ${player.wins}W/${player.games}G\nWhatsApp ID: ${whatsappId}`;
+    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson} - ${player.wins}W/${player.games}G\nWhatsApp ID: \`${whatsappId}\``;
+}
+
+function cmdDebug(whatsappId) {
+    const allLinks = db.prepare(`
+        SELECT id, display_name, whatsapp_id, position
+        FROM players
+        WHERE whatsapp_id IS NOT NULL
+        ORDER BY display_name
+    `).all();
+
+    let result = `🔍 *Debug Info:*\n\nJe WhatsApp ID: \`${whatsappId}\`\n\n`;
+
+    if (allLinks.length === 0) {
+        result += 'Geen spelers gelinkt aan WhatsApp.';
+    } else {
+        result += `*Gelinkte spelers (${allLinks.length}):*\n`;
+        allLinks.forEach(p => {
+            const posLabel = p.position ? ` [${p.position}]` : '';
+            const isYou = p.whatsapp_id === whatsappId ? ' ← *JIJ*' : '';
+            result += `• ${p.display_name}${posLabel}${isYou}\n`;
+            result += `  ID: \`${p.whatsapp_id}\`\n`;
+        });
+    }
+
+    return result;
 }
 
 // Graceful shutdown
