@@ -42,6 +42,7 @@ client.on('ready', () => {
 client.on('message', async msg => {
     console.log("GROUP ID:", msg.from);
     console.log("TEXT:", msg.body);
+    console.log("TEXT:", msg.author);
 
     // Auto-detect groep ID als nog niet ingesteld
     if (!CONFIG.WHATSAPP_GROUP_ID && msg.from.endsWith('@g.us')) {
@@ -79,6 +80,9 @@ client.on('message', async msg => {
         else if (cmd === '/wedstrijden') response = cmdWedstrijden();
         else if (cmd === '/positie') response = cmdPositie(whatsappId, args);
         else if (cmd === '/play') response = cmdPlay(whatsappId, args);
+        else if (cmd === '/addspeler') response = cmdAddSpeler(args);
+        else if (cmd === '/edit') response = cmdEdit(args);
+        else if (cmd === '/cancel') response = cmdCancel();
         else if (cmd === '/help') response = cmdHelp();
         else if (cmd === '/whoami') response = cmdWhoAmI(whatsappId);
     } catch (err) {
@@ -217,18 +221,17 @@ function cmdHelp() {
 
 🎮 Match Acties:
 /play <dag> <uur> - Nieuwe match aanmaken
+/edit <tijd> - Wijzig match tijd (bijv: /edit 20u30)
+/cancel - Annuleer huidige match
 /witwon of /zwartwon - Resultaat ingeven
 /mvp <naam> - Stem voor MVP
 /mvps - MVP leaderboard
 
 ⚙️ Profiel:
-/positie <positie> - Stel je positie in (keeper/verdediger/middenveld/aanvaller)
+/addspeler <naam> <positie> - Voeg speler toe (K/V/M/A)
+/positie <positie> - Stel je positie in
 /whoami - Test je WhatsApp link
-/help - Dit bericht
-
-📱 **Nummer Herkenning:**
-Je nummer wordt automatisch herkend als je gelinkt bent.
-Andere spelers kan je altijd inschrijven met hun naam.`;
+/help - Dit bericht`;
 }
 
 function cmdStatus() {
@@ -291,13 +294,9 @@ function cmdSignup(whatsappId, state, args) {
     let player;
 
     if (args.length > 0) {
-        // Naam meegegeven - zoek in database
+        // Naam meegegeven - zoek of maak aan (zoals app.js)
         const name = args.join(' ');
-        player = db.prepare(`SELECT * FROM players WHERE name_normalized = ?`).get(normalizeName(name));
-
-        if (!player) {
-            throw new Error(`Speler "${name}" niet gevonden in database.`);
-        }
+        player = ensurePlayerByName(name, 1); // is_guest=1 voor nieuwe spelers
     } else {
         // Geen naam - zoek via WhatsApp ID
         player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
@@ -373,13 +372,9 @@ function cmdNee(whatsappId, args) {
     let player;
 
     if (args.length > 0) {
-        // Naam meegegeven - zoek in database
+        // Naam meegegeven - zoek of maak aan (zoals app.js)
         const name = args.join(' ');
-        player = db.prepare(`SELECT * FROM players WHERE name_normalized = ?`).get(normalizeName(name));
-
-        if (!player) {
-            throw new Error(`Speler "${name}" niet gevonden in database.`);
-        }
+        player = ensurePlayerByName(name, 1); // is_guest=1 voor nieuwe spelers
     } else {
         // Geen naam - zoek via WhatsApp ID
         player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
@@ -859,29 +854,46 @@ function cmdPositie(whatsappId, args) {
     return `✅ ${player.display_name} positie → *${pos}*`;
 }
 
+// Normaliseer datum/tijd tekst (22u → 22:00, 21h30 → 21:30, etc.)
+function normalizeDateText(raw) {
+    let s = String(raw || '').trim().toLowerCase();
+    s = s.replace(/\s+/g, ' ');
+
+    // h -> u (21h, 21h30)
+    s = s.replace(/(\d)\s*h(\d?)/g, '$1u$2');
+
+    // 21u => 21:00
+    s = s.replace(/\b(\d{1,2})\s*u\b/g, (_, hh) => `${hh}:00`);
+
+    // 21u30 => 21:30
+    s = s.replace(/\b(\d{1,2})\s*u\s*(\d{1,2})\b/g, (_, hh, mm) => `${hh}:${String(mm).padStart(2, '0')}`);
+
+    // 21.30 => 21:30
+    s = s.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
+
+    // 21:0 => 21:00
+    s = s.replace(/\b(\d{1,2}):(\d)\b/g, (_, hh, m1) => `${hh}:${m1}0`);
+
+    return s;
+}
+
 function cmdPlay(whatsappId, args) {
-    // Verificatie dat gebruiker gelinkt is (optioneel - alleen voor admin check)
-    // const { player } = getOrLinkPlayer(whatsappId);
+    // Check of er al een actieve match is
+    if (getActiveMatch()) {
+        throw new Error('Er is al een actieve match. Eerst /cancel of zet resultaat met /witwon of /zwartwon.');
+    }
 
     const text = args.join(' ').trim();
-    if (!text) throw new Error('Gebruik: /play <dag> <uur>. Bijv: /play morgen 20:00');
+    if (!text) throw new Error('Gebruik: /play <dag> <uur>\nBijv: /play morgen 22u of /play vrijdag 20:30');
 
-    const parsed = chrono.parse(text, new Date(), { forwardDate: true });
-    if (parsed.length === 0) throw new Error(`Kon datum/tijd niet herkennen: "${text}"`);
+    // Normaliseer tekst (22u → 22:00, 21h30 → 21:30, etc.)
+    const normalized = normalizeDateText(text);
 
-    const dt = parsed[0].start.date();
+    const dt = chrono.nl.parseDate(normalized, new Date(), { forwardDate: true });
+    if (!dt) throw new Error(`Kon datum/tijd niet herkennen: "${text}"`);
+
     const date = dt.toISOString().slice(0, 10);
     const time = dt.toTimeString().slice(0, 5);
-
-    // Check duplicate
-    const existing = db.prepare(`
-      SELECT * FROM matches
-      WHERE match_date = ? AND starts_at = ? AND status IN ('open', 'full')
-    `).get(date, time);
-
-    if (existing) {
-      throw new Error(`Match op ${date} ${time} bestaat al.`);
-    }
 
     const info = db.prepare(`
       INSERT INTO matches (match_date, starts_at, status, player_limit, created_at)
@@ -892,6 +904,89 @@ function cmdPlay(whatsappId, args) {
     createActionsForMatch(info.lastInsertRowid);
 
     return `✅ Match aangemaakt: *${date}* om *${time}*\n\nSchrijf in met /ja!`;
+}
+
+function cmdAddSpeler(args) {
+    const fullText = args.join(' ').trim();
+    if (!fullText) throw new Error('Gebruik: /addspeler <naam> <positie>\nPositie: K, V, M, A');
+
+    const parts = fullText.split(/\s+/);
+    const posInput = parts[parts.length - 1].toUpperCase();
+
+    const posMap = {
+        'K': 'keeper',
+        'V': 'verdediger',
+        'M': 'middenveld',
+        'A': 'aanvaller',
+        'KEEPER': 'keeper',
+        'VERDEDIGER': 'verdediger',
+        'MIDDENVELD': 'middenveld',
+        'AANVALLER': 'aanvaller'
+    };
+
+    const position = posMap[posInput];
+    if (!position) {
+        throw new Error('Ongeldige positie. Gebruik: K (keeper), V (verdediger), M (middenveld), A (aanvaller)');
+    }
+
+    const name = parts.slice(0, -1).join(' ');
+    if (!name) throw new Error('Geef een naam op. Gebruik: /addspeler <naam> <positie>');
+
+    const p = ensurePlayerByName(name, 0);
+    db.prepare(`UPDATE players SET position = ? WHERE id = ?`).run(position, p.id);
+
+    const posLabel = { 'keeper': 'K', 'verdediger': 'V', 'middenveld': 'M', 'aanvaller': 'A' };
+    return `✅ Speler toegevoegd: ${p.display_name} [${posLabel[position]}]`;
+}
+
+function parseTimeOnlyRobust(str) {
+    let s = String(str || '').trim().toLowerCase();
+    s = s.replace(/\s+/g, '');
+    s = s.replace(/h/g, 'u');
+
+    let m = s.match(/^(\d{1,2})u$/);
+    if (m) return { h: Number(m[1]), min: 0 };
+
+    m = s.match(/^(\d{1,2})u(\d{1,2})$/);
+    if (m) return { h: Number(m[1]), min: Number(String(m[2]).padStart(2, '0')) };
+
+    m = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) return { h: Number(m[1]), min: Number(m[2]) };
+
+    m = s.match(/^(\d{1,2})\.(\d{2})$/);
+    if (m) return { h: Number(m[1]), min: Number(m[2]) };
+
+    return null;
+}
+
+function cmdEdit(args) {
+    const m = getActiveMatch();
+    if (!m) throw new Error('Geen actieve match.');
+
+    const t = parseTimeOnlyRobust(args.join(' '));
+    if (!t) throw new Error('Gebruik: /edit 22u of /edit 20:30 of /edit 21h30 of /edit 20u30');
+
+    const time = `${String(t.h).padStart(2, '0')}:${String(t.min).padStart(2, '0')}`;
+
+    db.prepare(`UPDATE matches SET starts_at = ? WHERE id = ?`).run(time, m.id);
+    createActionsForMatch(m.id);
+
+    return `✅ Match tijd gewijzigd naar *${time}*`;
+}
+
+function clearTeams(matchId) {
+    db.prepare(`UPDATE match_players SET team = NULL WHERE match_id = ?`).run(matchId);
+}
+
+function cmdCancel() {
+    const m = getActiveMatch();
+    if (!m) throw new Error('Geen actieve match.');
+
+    db.prepare(`UPDATE matches SET status = 'cancelled' WHERE id = ?`).run(m.id);
+    clearTeams(m.id);
+    cancelAllActions(m.id);
+
+    return `❌ Match ${m.match_date} ${m.starts_at} is gecanceld.`;
 }
 
 // ==================== SCHEDULER (Automatische herinneringen) ====================
