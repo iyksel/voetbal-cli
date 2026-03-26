@@ -7,7 +7,10 @@ const db = new Database('voetbal.db');
 db.pragma('foreign_keys = ON');
 
 const client = new Client({
-    authStrategy: new LocalAuth()
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
 });
 
 client.on('qr', qr => {
