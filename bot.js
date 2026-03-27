@@ -301,6 +301,11 @@ function cmdStatus() {
 }
 
 function cmdSignup(whatsappId, state, args) {
+    console.log(`🔗 SIGNUP DEBUG:`);
+    console.log(`   WhatsApp ID: ${whatsappId}`);
+    console.log(`   State: ${state}`);
+    console.log(`   Args: [${args.map(a => `"${a}"`).join(', ')}]`);
+
     const m = getActiveMatch();
     if (!m) throw new Error('Geen actieve match.');
 
@@ -310,28 +315,41 @@ function cmdSignup(whatsappId, state, args) {
     if (args.length > 0) {
         // Naam meegegeven - zoek of maak aan
         const name = args.join(' ');
+        console.log(`   → Naam van args: "${name}"`);
 
         // Check eerst of dit whatsapp_id al gelinkt is
         const existingLink = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
+        console.log(`   → Bestaande link:`, existingLink ? `${existingLink.display_name} (${existingLink.id})` : 'Geen');
 
         player = ensurePlayerByName(name, 1);
+        console.log(`   → Speler gevonden/aangemaakt: ${player.display_name} (ID: ${player.id})`);
 
         // Link alleen als dit whatsapp nummer nog niet gelinkt is
         if (!existingLink) {
             // Check of deze speler al een ander whatsapp_id heeft
             const currentPlayer = db.prepare(`SELECT * FROM players WHERE id = ?`).get(player.id);
+            console.log(`   → Huidige speler whatsapp_id:`, currentPlayer.whatsapp_id || 'Geen');
+
             if (!currentPlayer.whatsapp_id) {
+                console.log(`   → LINKING: ${player.display_name} ↔ ${whatsappId}`);
                 db.prepare(`UPDATE players SET whatsapp_id = ? WHERE id = ?`).run(whatsappId, player.id);
                 linkMessage = `\n🔗 ${player.display_name} is nu gelinkt aan je WhatsApp!`;
+                console.log(`   → Link SUCCESS!`);
+            } else {
+                console.log(`   → Speler heeft al ander WhatsApp ID: ${currentPlayer.whatsapp_id}`);
             }
+        } else {
+            console.log(`   → WhatsApp ID al in gebruik door: ${existingLink.display_name}`);
         }
     } else {
+        console.log(`   → Geen naam - zoeken via WhatsApp ID`);
         // Geen naam - zoek via WhatsApp ID
         player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
 
         if (!player) {
             throw new Error('Je WhatsApp nummer is nog niet gelinkt.\n\nGebruik: /ja <jouw naam>');
         }
+        console.log(`   → Gevonden via WhatsApp ID: ${player.display_name}`);
     }
 
     const existing = db.prepare(`
