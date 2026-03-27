@@ -112,6 +112,53 @@ client.initialize();
 
 function nowMs() { return Date.now(); }
 
+// -------------------- ROBUUSTE DATUM/TIJD PARSING --------------------
+function normalizeDateText(raw) {
+  let s = String(raw || '').trim().toLowerCase();
+  s = s.replace(/\s+/g, ' ');
+
+  // h -> u (21h, 21h30)
+  s = s.replace(/(\d)\s*h(\d?)/g, '$1u$2');
+
+  // 21u => 21:00
+  s = s.replace(/\b(\d{1,2})\s*u\b/g, (_, hh) => `${hh}:00`);
+
+  // 21u30 => 21:30
+  s = s.replace(/\b(\d{1,2})\s*u\s*(\d{1,2})\b/g, (_, hh, mm) => `${hh}:${String(mm).padStart(2, '0')}`);
+
+  // 21.30 => 21:30
+  s = s.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
+
+  // 21:0 => 21:00
+  s = s.replace(/\b(\d{1,2}):(\d)\b/g, (_, hh, m1) => `${hh}:${m1}0`);
+
+  return s;
+}
+
+function containsWeekdayOrRelative(normalized) {
+  return /\b(maandag|dinsdag|woensdag|donderdag|vrijdag|zaterdag|zondag|vandaag|morgen|overmorgen)\b/i.test(normalized);
+}
+
+function parseDateTimeNlRobust(rawText) {
+  const normalized = normalizeDateText(rawText);
+  const d = chrono.nl.parseDate(normalized, new Date(), { forwardDate: true }); // forwardDate: future assumption [web:10]
+  if (!d) return null;
+
+  // Safety: als chrono toch een tijd in het verleden geeft (bv. "vandaag 10:00" om 14:00),
+  // schuiven we forward naar de eerstvolgende logische future datum.
+  if (d <= new Date() && containsWeekdayOrRelative(normalized)) {
+    const dd = new Date(d);
+    // voor "vandaag/morgen/overmorgen" -> schuif per dag; voor weekdagen -> per 7 dagen
+    const isRelative = /\b(vandaag|morgen|overmorgen)\b/i.test(normalized);
+    const stepDays = isRelative ? 1 : 7;
+
+    while (dd <= new Date()) dd.setDate(dd.getDate() + stepDays);
+    return { date: dd, normalized };
+  }
+
+  return { date: d, normalized };
+}
+
 function normalizeName(name) {
   let s = String(name || '').trim().toLowerCase();
   s = s.replace(/^['"\s]+|['"\s]+$/g, '');
@@ -197,18 +244,29 @@ function countTotal(matchId) {
   `).get(matchId).c;
 }
 
+// -------------------- WINRATE (pure + Wilson Score for teams) --------------------
+function pureWinrate(p) {
+  if (!p.games) return 0;
+  return p.wins / p.games;
+}
+
+/**
+ * Wilson Score Lower Bound (95% confidence).
+ * Geeft een conservatieve schatting van de winrate:
+ *  - Weinig games → score dichter bij 50% (onzeker)
+ *  - Veel games   → score nadert echte winrate
+ *  - 0 games      → 0.25 (conservatieve startwaarde)
+ */
 function wilsonScore(p) {
+  if (!p.games) return 0.25;
   const n = p.games;
-  const wins = p.wins;
-  if (n === 0) return 0;
-
-  const z = 1.96;
-  const pHat = wins / n;
-  const denominator = 1 + (z * z) / n;
-  const center = pHat + (z * z) / (2 * n);
-  const margin = z * Math.sqrt((pHat * (1 - pHat) / n) + (z * z / (4 * n * n)));
-
-  return (center - margin) / denominator;
+  const phat = p.wins / n;
+  const z = 1.96; // 95% confidence
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const centre = phat + z2 / (2 * n);
+  const margin = z * Math.sqrt((phat * (1 - phat)) / n + z2 / (4 * n * n));
+  return (centre - margin) / denom;
 }
 
 // ==================== COMMAND HANDLERS ====================
@@ -613,9 +671,20 @@ function formatTeams(matchId) {
     return formatTeam(wit, '⬜ Team Wit') + '\n\n' + formatTeam(zwart, '⬛ Team Zwart');
 }
 
+/**
+ * Verbeterd team balancing algoritme:
+ * Balanceert op 4 dimensies:
+ * 1. Wilson score (skill level) - GEMIDDELDE
+ * 2. Wilson spreiding (standaarddeviatie) - INTERN BALANCED
+ * 3. Defensive strength (met middenveld als 50%)
+ * 4. Offensive strength (met middenveld als 50%)
+ *
+ * Keeper mis-match krijgt extra zware penalty.
+ */
 function generateBalancedTeams(players10) {
   const players = players10.map(p => ({ ...p, rate: wilsonScore(p) }));
 
+  // Bereken totalen voor alle spelers
   const totalWilson = players.reduce((s, p) => s + p.rate, 0);
   const totalDefense = calcDefensiveStrength(players);
   const totalOffense = calcOffensiveStrength(players);
@@ -628,93 +697,148 @@ function generateBalancedTeams(players10) {
   for (const teamA of combs) {
     const teamB = players.filter(p => !teamA.some(a => a.player_id === p.player_id));
 
+    // 1. Wilson score balans (target: 50% elk)
     const wilsonA = teamA.reduce((s, p) => s + p.rate, 0);
     const wilsonDiff = Math.abs(wilsonA - (totalWilson / 2));
 
+    // 2. Wilson spreiding: σ moet GELIJK zijn tussen beide teams
     const stdDevA = calcWilsonStdDev(teamA);
     const stdDevB = calcWilsonStdDev(teamB);
+    // Verschil in σ tussen teams = moet minimaal zijn
     const stdDevDiff = Math.abs(stdDevA - stdDevB);
 
+    // 3. Defensive strength balans
     const defenseA = calcDefensiveStrength(teamA);
     const defenseDiff = Math.abs(defenseA - (totalDefense / 2));
 
+    // 4. Offensive strength balans
     const offenseA = calcOffensiveStrength(teamA);
     const offenseDiff = Math.abs(offenseA - (totalOffense / 2));
 
+    // Keeper balans (probeer gelijk te verdelen)
     const keepersA = countKeepers(teamA);
     const keepersB = countKeepers(teamB);
     let keeperPenalty = 0;
 
     if (totalKeepers === 2) {
+      // Ideaal: 1-1 verdeling
       keeperPenalty = (keepersA !== 1) ? 15 : 0;
+    } else if (totalKeepers === 1) {
+      // Acceptabel: 1-0 verdeling (geen penalty)
+      keeperPenalty = 0;
     } else if (totalKeepers > 2) {
+      // Probeer zo gelijk mogelijk te verdelen
       keeperPenalty = Math.abs(keepersA - keepersB) * 5;
     }
 
+    // Totale score (lagere = beter)
+    // PRIORITEIT: 1) Posities, 2) Wilson totaal, 3) σ verschil
     const score =
-      defenseDiff * 100.0 +
-      offenseDiff * 100.0 +
-      keeperPenalty * 80.0 +
-      wilsonDiff * 60.0 +
-      stdDevDiff * 30.0;
+      defenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
+      offenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
+      keeperPenalty * 80.0 +     // #1 Keeper balans: zeer belangrijk
+      wilsonDiff * 60.0 +        // #2 Wilson totaal gelijk: belangrijk
+      stdDevDiff * 30.0;         // #3 σ verschil: laagste prioriteit
 
     if (score < bestScore) {
       bestScore = score;
-      best = { teamA, teamB };
+      best = {
+        teamA,
+        teamB,
+        wilsonDiff,
+        stdDevDiff,
+        stdDevA,
+        stdDevB,
+        defenseDiff,
+        offenseDiff,
+        keepersA,
+        keepersB
+      };
     }
   }
 
-  return { teamWit: best.teamA, teamZwart: best.teamB };
+  return {
+    teamWit: best.teamA,
+    teamZwart: best.teamB,
+    diff: best.wilsonDiff,
+    stdDevDiff: best.stdDevDiff,
+    defenseDiff: best.defenseDiff,
+    offenseDiff: best.offenseDiff
+  };
 }
 
+// -------------------- TEAMS --------------------
 function combinations(arr, k) {
-  const result = [];
+  const ret = [];
   const n = arr.length;
-
-  function backtrack(start, comb) {
-    if (comb.length === k) {
-      result.push([...comb]);
-      return;
-    }
+  function rec(start, comb) {
+    if (comb.length === k) { ret.push(comb.slice()); return; }
     for (let i = start; i < n; i++) {
       comb.push(arr[i]);
-      backtrack(i + 1, comb);
+      rec(i + 1, comb);
       comb.pop();
     }
   }
-
-  backtrack(0, []);
-  return result;
+  rec(0, []);
+  return ret;
 }
 
+/**
+ * Bereken defensive strength van een team.
+ * Keeper: 100% defense, Verdediger: 100%, Middenveld: 50%, Aanvaller: 0%
+ */
 function calcDefensiveStrength(team) {
   let strength = 0;
   for (const p of team) {
     if (p.position === 'keeper') strength += 1.0;
     else if (p.position === 'verdediger') strength += 1.0;
     else if (p.position === 'middenveld') strength += 0.5;
+    // aanvaller en onbekend: 0
   }
   return strength;
 }
 
+/**
+ * Bereken offensive strength van een team.
+ * Aanvaller: 100%, Middenveld: 50%, Verdediger: 0%, Keeper: 0%
+ */
 function calcOffensiveStrength(team) {
   let strength = 0;
   for (const p of team) {
     if (p.position === 'aanvaller') strength += 1.0;
     else if (p.position === 'middenveld') strength += 0.5;
+    // verdediger, keeper en onbekend: 0
   }
   return strength;
 }
 
+/**
+ * Tel aantal keepers in team
+ */
 function countKeepers(team) {
   return team.filter(p => p.position === 'keeper').length;
 }
 
+/**
+ * Bereken standaarddeviatie van Wilson scores binnen een team.
+ * Lagere stddev = meer balanced team (geen superstars + zwakke spelers)
+ */
 function calcWilsonStdDev(team) {
   const rates = team.map(p => p.rate);
   const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
   const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
   return Math.sqrt(variance);
+}
+
+/**
+ * Bereken variance van Wilson scores binnen een team.
+ * Gebruikt variance (stddev²) voor exponentiële penalty op hoge spreiding.
+ */
+function calcWilsonVariance(team) {
+  const rates = team.map(p => p.rate);
+  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
+  const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
+  return variance;
 }
 
 function cmdWin(team, args) {
@@ -948,29 +1072,6 @@ function cmdPositie(whatsappId, args) {
     db.prepare(`UPDATE players SET position = ? WHERE id = ?`).run(pos, player.id);
 
     return `✅ ${player.display_name} positie → *${pos}*`;
-}
-
-// Normaliseer datum/tijd tekst (22u → 22:00, 21h30 → 21:30, etc.)
-function normalizeDateText(raw) {
-    let s = String(raw || '').trim().toLowerCase();
-    s = s.replace(/\s+/g, ' ');
-
-    // h -> u (21h, 21h30)
-    s = s.replace(/(\d)\s*h(\d?)/g, '$1u$2');
-
-    // 21u => 21:00
-    s = s.replace(/\b(\d{1,2})\s*u\b/g, (_, hh) => `${hh}:00`);
-
-    // 21u30 => 21:30
-    s = s.replace(/\b(\d{1,2})\s*u\s*(\d{1,2})\b/g, (_, hh, mm) => `${hh}:${String(mm).padStart(2, '0')}`);
-
-    // 21.30 => 21:30
-    s = s.replace(/\b(\d{1,2})\.(\d{2})\b/g, '$1:$2');
-
-    // 21:0 => 21:00
-    s = s.replace(/\b(\d{1,2}):(\d)\b/g, (_, hh, m1) => `${hh}:${m1}0`);
-
-    return s;
 }
 
 function cmdPlay(whatsappId, args) {
