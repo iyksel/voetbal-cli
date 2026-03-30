@@ -166,6 +166,22 @@ function normalizeName(name) {
   return s;
 }
 
+// -------------------- DATUM FORMATTING --------------------
+const WEEKDAYS_NL = ['Zondag', 'Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag'];
+
+/**
+ * Format een datum als "Maandag 22/04"
+ * @param {string} isoDate - ISO datum string (YYYY-MM-DD)
+ * @returns {string} - Geformatteerde datum
+ */
+function formatDateNl(isoDate) {
+  const d = new Date(isoDate + 'T12:00:00'); // Middag om timezone issues te vermijden
+  const weekday = WEEKDAYS_NL[d.getDay()];
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${weekday} ${day}/${month}`;
+}
+
 function titleCaseWords(norm) {
   return norm
     .split(' ')
@@ -319,6 +335,7 @@ function cmdStatus() {
 
     const yes = rows.filter(r => r.signup_state === 'ja');
     const kan = rows.filter(r => r.signup_state === 'kan');
+    const total = yes.length + kan.length;
 
     const posLabel = (pos) => {
       if (!pos) return '';
@@ -330,29 +347,33 @@ function cmdStatus() {
     };
 
     const lines = [
-      `📅 *Match ${m.match_date} om ${m.starts_at}*`,
-      `📊 Status: *${yes.length}/${m.player_limit}*`,
-      '',
-      `✅ *JA (${yes.length}):*`
+      `📅 *Match ${formatDateNl(m.match_date)} om ${m.starts_at}*`,
+      `📊 Totaal: *${total}/${m.player_limit}`,
+      ''
     ];
+
+    // Toon hint als match vol is maar niet 10x ja
+    if (total >= m.player_limit && yes.length < m.player_limit) {
+      lines.push(`⚠️ *Nog ${m.player_limit - yes.length} spelers nodig!*`);
+      lines.push('');
+    }
 
     if (yes.length > 0) {
       yes.forEach((s, i) => {
-        lines.push(`${i + 1}. ${s.display_name}${posLabel(s.position)}`);
+        lines.push(`${i + 1}. ${s.display_name}`);
       });
     } else {
       lines.push('  (niemand)');
     }
 
     lines.push('');
-    lines.push(`⚠️ *KAN (${kan.length}):*`);
+
 
     if (kan.length > 0) {
+      lines.push(`⚠️ *KAN (${kan.length}):*`);
       kan.forEach((s, i) => {
-        lines.push(`${i + 1}. ${s.display_name}${posLabel(s.position)}`);
+        lines.push(`${i + 1}. ${s.display_name}`);
       });
-    } else {
-      lines.push('  (niemand)');
     }
 
     return lines.join('\n');
@@ -462,10 +483,18 @@ function buildSignupResult(match, player, state, linkMessage) {
     const total = countTotal(match.id);
     let result = `✅ ${player.display_name} → *${state}*${linkMessage}\n\n`;
 
-    // Auto teams bij 10 spelers
-    if (total === match.player_limit) {
-        result += '🎉 *We zijn met 10! Teams worden gemaakt...*\n\n';
+    const yesCount = countYes(match.id);
+
+    // Teams alleen als er 10x /ja is
+    if (yesCount === match.player_limit) {
+        result += '🎉 *We zijn met 10 zekere spelers! Teams worden gemaakt...*\n\n';
         result += generateAndSaveTeams(match.id);
+    } else if (total === match.player_limit) {
+        // Match vol, maar niet iedereen is zeker
+        const kanCount = total - yesCount;
+        result += `📋 *Match vol!* (${yesCount}x ja, ${kanCount}x kan)\n`;
+        result += `⚠️ Nog ${kanCount} ${kanCount === 1 ? 'persoon' : 'personen'} moet /ja zeggen voor teams.\n\n`;
+        result += cmdStatus();
     } else {
         result += cmdStatus();
     }
@@ -478,7 +507,7 @@ function generateAndSaveTeams(matchId) {
       SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position
       FROM match_players mp
       JOIN players p ON p.id = mp.player_id
-      WHERE mp.match_id = ? AND mp.is_waitlist = 0
+      WHERE mp.match_id = ? AND mp.signup_state = 'ja' AND mp.is_waitlist = 0
       ORDER BY mp.joined_at ASC
     `).all(matchId);
 
@@ -593,9 +622,14 @@ function cmdTeams() {
 
     const yes = countYes(m.id);
     const total = countTotal(m.id);
+    const kan = total - yes;
 
-    if (yes !== m.player_limit || total !== m.player_limit) {
-      throw new Error(`Teams kan pas als er ${m.player_limit}x /ja is. Nu: ${yes}x ja.`);
+    if (yes !== m.player_limit) {
+      if (kan > 0) {
+        throw new Error(`Teams kan pas als er ${m.player_limit}x /ja is.\nNu: ${yes}x ja, ${kan}x kan.\n\n⚠️ Nog ${kan} ${kan === 1 ? 'persoon' : 'personen'} moet /ja zeggen!`);
+      } else {
+        throw new Error(`Teams kan pas als er ${m.player_limit}x /ja is. Nu: ${yes}x ja.`);
+      }
     }
 
     // Generate teams
@@ -662,7 +696,7 @@ function formatTeams(matchId) {
       const lines = [`*${name}*`, `Wilson: ${(avg * 100).toFixed(1)}% (σ=${(stdDev * 100).toFixed(1)}%)`, ''];
       sorted.forEach(p => {
         const w = wilsonScore(p);
-        lines.push(`- ${p.display_name} [${posLabel(p.position)}] (W:${(w * 100).toFixed(0)}% | ${p.wins}W/${p.games}G)`);
+        lines.push(`- ${p.display_name} (${(w * 100).toFixed(0)}% | ${p.wins}/${p.games})`);
       });
 
       return lines.join('\n');
@@ -893,9 +927,96 @@ function cmdWin(team, args) {
     });
     tx();
 
+    // Schedule MVP voting end (2 uur na resultaat)
+    scheduleMvpEnd(m.id);
+
     const teamLabel = team.charAt(0).toUpperCase() + team.slice(1);
-    const scoreText = score ? ` met *${score}*` : '';
-    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\nStem nu voor MVP: /mvp <naam>`;
+    const scoreText = score ? ` met ${score}` : '';
+    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\n⏰ MVP stemmen open voor 2 uur (of tot 10 stemmen / 6+ voor iemand)\n\nStem nu: /mvp <naam>\n\n` + cmdLijst();
+}
+
+function scheduleMvpEnd(matchId) {
+  // Cancel bestaande mvp_end actions
+  db.prepare(`
+    UPDATE scheduled_actions
+    SET cancelled_at = ?
+    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NULL
+  `).run(nowMs(), matchId);
+
+  // Schedule nieuwe mvp_end action (2 uur later)
+  const mvpEndAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  db.prepare(`
+    INSERT INTO scheduled_actions (match_id, action_type, run_at, executed_at, cancelled_at, created_at)
+    VALUES (?, 'mvp_end', ?, NULL, NULL, ?)
+  `).run(matchId, mvpEndAt.toISOString(), nowMs());
+
+  console.log(`⏰ MVP voting eindigt om ${mvpEndAt.toTimeString().slice(0, 5)}`);
+}
+
+function isMvpVotingOpen(matchId) {
+  // Check of mvp_end action al is uitgevoerd
+  const executed = db.prepare(`
+    SELECT * FROM scheduled_actions
+    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NOT NULL
+  `).get(matchId);
+
+  return !executed;
+}
+
+function checkAndFinalizeMvpVoting(matchId) {
+  // Tel totaal aantal votes
+  const totalVotes = db.prepare(`
+    SELECT COUNT(*) as c FROM mvp_votes WHERE match_id = ?
+  `).get(matchId).c;
+
+  // Check of iemand 6+ votes heeft
+  const topVoter = db.prepare(`
+    SELECT voted_player_id, COUNT(*) as votes
+    FROM mvp_votes
+    WHERE match_id = ?
+    GROUP BY voted_player_id
+    ORDER BY votes DESC
+    LIMIT 1
+  `).get(matchId);
+
+  const hasWinner = topVoter && topVoter.votes >= 6;
+  const allVoted = totalVotes >= 10;
+
+  if (hasWinner || allVoted) {
+    return finalizeMvpVoting(matchId);
+  }
+
+  return null;
+}
+
+function finalizeMvpVoting(matchId) {
+  // Markeer mvp_end als uitgevoerd
+  db.prepare(`
+    UPDATE scheduled_actions
+    SET executed_at = ?
+    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NULL
+  `).run(nowMs(), matchId);
+
+  // Bepaal MVP (meeste stemmen)
+  const winner = db.prepare(`
+    SELECT p.display_name, COUNT(*) as votes
+    FROM mvp_votes v
+    JOIN players p ON p.id = v.voted_player_id
+    WHERE v.match_id = ?
+    GROUP BY v.voted_player_id
+    ORDER BY votes DESC
+    LIMIT 1
+  `).get(matchId);
+
+  if (!winner) {
+    return '📊 *MVP Voting gesloten*\n\nGeen stemmen ontvangen.';
+  }
+
+  const totalVotes = db.prepare(`
+    SELECT COUNT(*) as c FROM mvp_votes WHERE match_id = ?
+  `).get(matchId).c;
+
+  return `🏆 *MVP Voting gesloten!*\n\n⭐ *${winner.display_name}* is de MVP met ${winner.votes}/${totalVotes} stemmen!`;
 }
 
 function cmdMvp(whatsappId, args) {
@@ -904,6 +1025,11 @@ function cmdMvp(whatsappId, args) {
     `).get();
 
     if (!m) throw new Error('Geen gesloten match gevonden. Voer eerst resultaat in met /witwon of /zwartwon.');
+
+    // Check of MVP voting nog open is
+    if (!isMvpVotingOpen(m.id)) {
+      throw new Error('MVP voting voor deze match is al gesloten.');
+    }
 
     const player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
     if (!player) {
@@ -945,6 +1071,13 @@ function cmdMvp(whatsappId, args) {
       VALUES (?, ?, ?, ?)
     `).run(m.id, player.id, votedPlayer.id, nowMs());
 
+    // Check of voting moet eindigen (10 votes of 6+ voor iemand)
+    const finalizeResult = checkAndFinalizeMvpVoting(m.id);
+    if (finalizeResult) {
+      return `✅ Je stemde voor *${votedPlayer.display_name}*!\n\n` + finalizeResult;
+    }
+
+    // Toon huidige stand
     const votes = db.prepare(`
       SELECT p.display_name, COUNT(*) as count
       FROM mvp_votes v
@@ -954,13 +1087,18 @@ function cmdMvp(whatsappId, args) {
       ORDER BY count DESC
     `).all(m.id);
 
-    let result = `✅ Stem geregistreerd: je stemde voor *${votedPlayer.display_name}* als MVP!`;
+    const totalVotes = votes.reduce((sum, v) => sum + v.count, 0);
+    const remaining = 10 - totalVotes;
 
-    if (votes.length > 0) {
-      result += '\n\n*Huidige stemmen:*\n';
-      votes.forEach(v => {
-        result += `${v.display_name}: ${v.count} stem${v.count > 1 ? 'men' : ''}\n`;
-      });
+    let result = `✅ Stem geregistreerd: je stemde voor *${votedPlayer.display_name}* als MVP!`;
+    result += `\n\n📊 *Stand (${totalVotes}/10 stemmen):*\n`;
+    votes.forEach(v => {
+      const bar = '█'.repeat(v.count) + '░'.repeat(6 - v.count);
+      result += `${v.display_name}: ${bar} ${v.count}\n`;
+    });
+
+    if (remaining > 0) {
+      result += `\n⏳ Nog ${remaining} ${remaining === 1 ? 'stem' : 'stemmen'} of 6+ voor winnaar`;
     }
 
     return result;
@@ -1036,22 +1174,59 @@ function cmdLijst() {
 }
 
 function cmdWedstrijden() {
-    const rows = db.prepare(`
-      SELECT id, match_date, starts_at, status
-      FROM matches
-      ORDER BY starts_at DESC
-      LIMIT 20
+    // Alleen closed matches, laatste 5
+    const matches = db.prepare(`
+      SELECT m.id, m.match_date, mr.winner_team, mr.score
+      FROM matches m
+      LEFT JOIN match_results mr ON mr.match_id = m.id
+      WHERE m.status = 'closed'
+      ORDER BY m.starts_at DESC
+      LIMIT 5
     `).all();
 
-    if (rows.length === 0) {
-      return 'ℹ️ Nog geen wedstrijden.';
+    if (matches.length === 0) {
+      return 'ℹ️ Nog geen gespeelde wedstrijden.';
     }
 
     const lines = ['📅 *Laatste Wedstrijden:*', ''];
-    rows.forEach(r => {
-      const status = r.status === 'closed' ? '✅' : r.status === 'cancelled' ? '❌' : '⏳';
-      lines.push(`${status} ${r.match_date} ${r.starts_at}`);
-    });
+
+    for (const match of matches) {
+      // Haal teams op
+      const wit = db.prepare(`
+        SELECT p.display_name
+        FROM match_players mp
+        JOIN players p ON p.id = mp.player_id
+        WHERE mp.match_id = ? AND mp.team = 'wit'
+      `).all(match.id).map(p => p.display_name.split(' ')[0]); // Alleen voornaam
+
+      const zwart = db.prepare(`
+        SELECT p.display_name
+        FROM match_players mp
+        JOIN players p ON p.id = mp.player_id
+        WHERE mp.match_id = ? AND mp.team = 'zwart'
+      `).all(match.id).map(p => p.display_name.split(' ')[0]); // Alleen voornaam
+
+      // Format datum als dd/mm
+      const d = new Date(match.match_date + 'T12:00:00');
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const dateStr = `${day}/${month}`;
+
+      // Score (of '-' als geen score)
+      const score = match.score || '-';
+
+      // Bepaal winnaar indicator
+      const witWon = match.winner_team === 'wit';
+      const witNames = wit.join(',');
+      const zwartNames = zwart.join(',');
+
+      // Format: dd/mm | Wit 2-0 Zwart (winnaar vet)
+      if (witWon) {
+        lines.push(`${dateStr} | *${witNames}* ${score} ${zwartNames}`);
+      } else {
+        lines.push(`${dateStr} | ${witNames} ${score} *${zwartNames}*`);
+      }
+    }
 
     return lines.join('\n');
 }
@@ -1100,7 +1275,7 @@ function cmdPlay(whatsappId, args) {
     // Schedule automatische herinneringen
     createActionsForMatch(info.lastInsertRowid);
 
-    return `✅ Match aangemaakt: *${date}* om *${time}*\n\nSchrijf in met /ja!`;
+    return `✅ Match aangemaakt: *${formatDateNl(date)}* om *${time}*\n\nSchrijf in met /ja!`;
 }
 
 function cmdAddSpeler(args) {
@@ -1183,7 +1358,7 @@ function cmdCancel() {
     clearTeams(m.id);
     cancelAllActions(m.id);
 
-    return `❌ Match ${m.match_date} ${m.starts_at} is gecanceld.`;
+    return `❌ Match ${formatDateNl(m.match_date)} ${m.starts_at} is gecanceld.`;
 }
 
 // ==================== SCHEDULER (Automatische herinneringen) ====================
@@ -1273,9 +1448,29 @@ async function executeDueActionsOnce() {
 
     const m = db.prepare(`SELECT * FROM matches WHERE id = ?`).get(a.match_id);
     if (!m) continue;
-    if (m.status === 'cancelled' || m.status === 'closed') continue;
 
     let message = null;
+
+    // MVP end kan ook voor closed matches (dat is juist de bedoeling)
+    if (a.action_type === 'mvp_end') {
+      if (m.status === 'closed') {
+        message = finalizeMvpVoting(m.id);
+        console.log(`🏆 MVP VOTING CLOSED voor match ${m.id}`);
+      }
+      // Stuur bericht en ga door naar volgende action
+      if (message) {
+        try {
+          await client.sendMessage(CONFIG.WHATSAPP_GROUP_ID, message);
+          console.log(`✅ MVP bericht verzonden naar WhatsApp`);
+        } catch (err) {
+          console.error(`❌ Kan MVP bericht niet versturen:`, err);
+        }
+      }
+      continue;
+    }
+
+    // Andere actions: skip cancelled/closed matches
+    if (m.status === 'cancelled' || m.status === 'closed') continue;
 
     if (a.action_type === 'day_message') {
       message = `📅 *Vandaag ${m.starts_at}*\n\n/ja om te bevestigen\n/kan als je misschien kan`;
