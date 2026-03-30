@@ -771,8 +771,8 @@ function generateBalancedTeams(players10) {
       defenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
       offenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
       keeperPenalty * 80.0 +     // #1 Keeper balans: zeer belangrijk
-      stdDevDiff * 150.0 +       // #2 σ verschil: VERHOOGD - teams moeten intern even gevarieerd zijn
-      wilsonDiff * 50.0;         // #3 Wilson totaal gelijk: belangrijk maar minder dan σ
+      stdDevDiff * 50.0 +       // #2 σ verschil: VERHOOGD - teams moeten intern even gevarieerd zijn
+      wilsonDiff * 150.0;         // #3 Wilson totaal gelijk: belangrijk maar minder dan σ
 
     if (score < bestScore) {
       bestScore = score;
