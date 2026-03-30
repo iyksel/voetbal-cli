@@ -676,10 +676,14 @@ function formatTeams(matchId) {
       const playersWithRate = team.map(p => ({ ...p, rate: wilsonScore(p) }));
       const rates = playersWithRate.map(p => p.rate);
       const avg = rates.reduce((s, r) => s + r, 0) / rates.length;
-      const variance = rates.reduce((s, r) => s + Math.pow(r - avg, 2), 0) / rates.length;
-      const stdDev = Math.sqrt(variance);
       const defense = calcDefensiveStrength(playersWithRate);
       const offense = calcOffensiveStrength(playersWithRate);
+
+      // σ per positietype
+      const defPlayers = playersWithRate.filter(p => p.position === 'keeper' || p.position === 'verdediger');
+      const offPlayers = playersWithRate.filter(p => p.position === 'middenveld' || p.position === 'aanvaller');
+      const defStdDev = calcStdDevForGroup(defPlayers);
+      const offStdDev = calcStdDevForGroup(offPlayers);
 
       const posLabel = (pos) => {
         if (!pos) return '?';
@@ -699,7 +703,8 @@ function formatTeams(matchId) {
 
       const lines = [
         `*${name}*`,
-        `W: ${(avg * 100).toFixed(0)}% | σ: ${(stdDev * 100).toFixed(0)}% | DEF: ${defense.toFixed(1)} | OFF: ${offense.toFixed(1)}`,
+        `W: ${(avg * 100).toFixed(0)}% | DEF: ${defense.toFixed(1)} | OFF: ${offense.toFixed(1)}`,
+        `σDEF: ${(defStdDev * 100).toFixed(0)}% | σOFF: ${(offStdDev * 100).toFixed(0)}%`,
         ''
       ];
 
@@ -715,107 +720,48 @@ function formatTeams(matchId) {
 }
 
 /**
- * Team balancing algoritme met swap-optimalisatie:
+ * Team balancing algoritme met exhaustive search:
  *
- * STAP 1: Posities balanceren (harde constraint)
- *         - Verdeel keepers, verdedigers, middenvelders, aanvallers gelijk
+ * Probeert alle 252 mogelijke 5v5 combinaties en kiest de beste.
  *
- * STAP 2: Initiële verdeling op basis van Wilson scores
- *         - Snake draft per positie (beste naar team A, 2e beste naar team B, etc.)
- *
- * STAP 3: Swap-optimalisatie
- *         - Wissel spelers van DEZELFDE positie tussen teams
- *         - Behoud positie-balans, verbeter Wilson + σ balans
- *         - Herhaal tot geen verbetering meer mogelijk is
+ * PRIORITEIT 1: DEF en OFF moeten bijna gelijk zijn
+ * PRIORITEIT 2: Wilson scores moeten gelijk zijn
+ * PRIORITEIT 3: σ per positietype (defensief K+V, offensief M+A) moet gelijk zijn
  */
 function generateBalancedTeams(players10) {
   const players = players10.map(p => ({ ...p, rate: wilsonScore(p) }));
 
-  // Groepeer per positie
-  const positions = ['keeper', 'verdediger', 'middenveld', 'aanvaller'];
-  const byPos = {};
-  for (const pos of positions) {
-    byPos[pos] = players.filter(p => p.position === pos);
-  }
-  byPos['onbekend'] = players.filter(p => !p.position || !positions.includes(p.position));
+  // Exhaustive search: probeer alle 252 mogelijke 5v5 splits
+  const allCombinations = combinations(players, 5);
 
-  // STAP 1 & 2: Initiële positie-balanced split met snake draft
-  let teamA = [];
-  let teamB = [];
+  let bestTeamA = null;
+  let bestTeamB = null;
+  let bestScore = Infinity;
 
-  for (const pos of [...positions, 'onbekend']) {
-    const group = byPos[pos].slice();
-    // Sorteer op Wilson (hoog → laag)
-    group.sort((a, b) => b.rate - a.rate);
+  for (const teamA of allCombinations) {
+    const teamB = players.filter(p => !teamA.includes(p));
+    const score = calcTeamBalanceScore(teamA, teamB);
 
-    // Snake draft: 1→A, 2→B, 3→B, 4→A, etc.
-    let toA = true;
-    for (let i = 0; i < group.length; i++) {
-      if (teamA.length >= 5) {
-        teamB.push(group[i]);
-      } else if (teamB.length >= 5) {
-        teamA.push(group[i]);
-      } else if (toA) {
-        teamA.push(group[i]);
-        // Snake: alleen wisselen als niet laatste van groep
-        if (i < group.length - 1) toA = false;
-      } else {
-        teamB.push(group[i]);
-        toA = true;
-      }
-    }
-  }
-
-  // STAP 3: Swap-optimalisatie
-  let iterations = 0;
-  const maxIterations = 100;
-  let improved = true;
-
-  while (improved && iterations < maxIterations) {
-    improved = false;
-    iterations++;
-    const currentScore = calcTeamBalanceScore(teamA, teamB);
-
-    // Probeer alle same-position swaps
-    for (let i = 0; i < teamA.length; i++) {
-      for (let j = 0; j < teamB.length; j++) {
-        const posA = teamA[i].position || 'onbekend';
-        const posB = teamB[j].position || 'onbekend';
-
-        // Alleen swappen als zelfde positie
-        if (posA !== posB) continue;
-
-        // Probeer swap
-        const temp = teamA[i];
-        teamA[i] = teamB[j];
-        teamB[j] = temp;
-
-        const newScore = calcTeamBalanceScore(teamA, teamB);
-
-        if (newScore < currentScore - 0.001) {
-          // Swap verbetert balans - behoud
-          improved = true;
-        } else {
-          // Swap helpt niet - ongedaan maken
-          teamB[j] = teamA[i];
-          teamA[i] = temp;
-        }
-      }
+    if (score < bestScore) {
+      bestScore = score;
+      bestTeamA = teamA.slice();
+      bestTeamB = teamB.slice();
     }
   }
 
   // Bereken finale stats
-  const statsA = calcTeamStats(teamA);
-  const statsB = calcTeamStats(teamB);
+  const statsA = calcTeamStats(bestTeamA);
+  const statsB = calcTeamStats(bestTeamB);
 
   return {
-    teamWit: teamA,
-    teamZwart: teamB,
+    teamWit: bestTeamA,
+    teamZwart: bestTeamB,
     wilsonDiff: Math.abs(statsA.wilson - statsB.wilson),
     stdDevDiff: Math.abs(statsA.stdDev - statsB.stdDev),
     defenseDiff: Math.abs(statsA.defense - statsB.defense),
     offenseDiff: Math.abs(statsA.offense - statsB.offense),
-    iterations,
+    defStdDevDiff: Math.abs(statsA.defStdDev - statsB.defStdDev),
+    offStdDevDiff: Math.abs(statsA.offStdDev - statsB.offStdDev),
     statsWit: statsA,
     statsZwart: statsB
   };
@@ -831,23 +777,41 @@ function calcTeamStats(team) {
   const offense = calcOffensiveStrength(team);
   const keepers = countKeepers(team);
 
-  return { wilson, stdDev, defense, offense, keepers };
+  // σ per positietype (defensief: K+V, offensief: M+A)
+  const defPlayers = team.filter(p => p.position === 'keeper' || p.position === 'verdediger');
+  const offPlayers = team.filter(p => p.position === 'middenveld' || p.position === 'aanvaller');
+  const defStdDev = calcStdDevForGroup(defPlayers);
+  const offStdDev = calcStdDevForGroup(offPlayers);
+
+  return { wilson, stdDev, defense, offense, keepers, defStdDev, offStdDev };
+}
+
+function calcStdDevForGroup(players) {
+  if (players.length === 0) return 0;
+  const rates = players.map(p => p.rate);
+  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
+  const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
+  return Math.sqrt(variance);
 }
 
 function calcTeamBalanceScore(teamA, teamB) {
   const statsA = calcTeamStats(teamA);
   const statsB = calcTeamStats(teamB);
 
-  // Wilson verschil (prioriteit 1)
+  // PRIORITEIT 1: DEF en OFF moeten bijna gelijk zijn
+  const defDiff = Math.abs(statsA.defense - statsB.defense);
+  const offDiff = Math.abs(statsA.offense - statsB.offense);
+
+  // PRIORITEIT 2: Wilson scores gelijk
   const wilsonDiff = Math.abs(statsA.wilson - statsB.wilson);
 
-  // σ verschil - genormaliseerd (prioriteit 2)
-  const avgStdDev = (statsA.stdDev + statsB.stdDev) / 2 || 0.01;
-  const stdDevDiff = Math.abs(statsA.stdDev - statsB.stdDev) / avgStdDev;
+  // PRIORITEIT 3: σ per positietype gelijk (defensief en offensief apart)
+  const defStdDevDiff = Math.abs(statsA.defStdDev - statsB.defStdDev);
+  const offStdDevDiff = Math.abs(statsA.offStdDev - statsB.offStdDev);
 
-  // Score: lagere = beter
-  // Wilson is belangrijker, maar σ telt ook mee
-  return wilsonDiff * 100 + stdDevDiff * 30;
+  // Gewogen score: lagere = beter
+  // Gewichten: DEF/OFF (1000x) >> Wilson (100x) >> σ per positie (10x)
+  return (defDiff + offDiff) * 1000 + wilsonDiff * 100 + (defStdDevDiff + offStdDevDiff) * 10;
 }
 
 // -------------------- TEAMS --------------------
