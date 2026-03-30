@@ -739,7 +739,10 @@ function generateBalancedTeams(players10) {
     const stdDevA = calcWilsonStdDev(teamA);
     const stdDevB = calcWilsonStdDev(teamB);
     // Verschil in σ tussen teams = moet minimaal zijn
+    // Normaliseer door te delen door gemiddelde σ (voorkomt dat kleine absolute verschillen genegeerd worden)
+    const avgStdDev = (stdDevA + stdDevB) / 2 || 0.01; // Voorkom deling door 0
     const stdDevDiff = Math.abs(stdDevA - stdDevB);
+    const stdDevDiffNormalized = stdDevDiff / avgStdDev; // Relatief verschil (0 = gelijk, 1 = 100% verschil)
 
     // 3. Defensive strength balans
     const defenseA = calcDefensiveStrength(teamA);
@@ -766,13 +769,13 @@ function generateBalancedTeams(players10) {
     }
 
     // Totale score (lagere = beter)
-    // PRIORITEIT: 1) Posities, 2) σ verschil, 3) Wilson totaal
+    // PRIORITEIT: 1) σ verschil (genormaliseerd), 2) Posities, 3) Wilson totaal
     const score =
-      defenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
-      offenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
-      keeperPenalty * 80.0 +     // #1 Keeper balans: zeer belangrijk
-      stdDevDiff * 150.0 +       // #2 σ verschil: VERHOOGD - teams moeten intern even gevarieerd zijn
-      wilsonDiff * 50.0;         // #3 Wilson totaal gelijk: belangrijk maar minder dan σ
+      stdDevDiffNormalized * 200.0 + // #1 σ verschil: HOOGSTE prioriteit (genormaliseerd!)
+      defenseDiff * 80.0 +           // #2 Positie balans
+      offenseDiff * 80.0 +           // #2 Positie balans
+      keeperPenalty * 60.0 +         // #2 Keeper balans
+      wilsonDiff * 40.0;             // #3 Wilson totaal gelijk
 
     if (score < bestScore) {
       bestScore = score;
