@@ -348,7 +348,7 @@ function cmdStatus() {
 
     const lines = [
       `📅 *Match ${formatDateNl(m.match_date)} om ${m.starts_at}*`,
-      `📊 Totaal: *${total}/${m.player_limit}`,
+      `📊 Totaal: ${total}/${m.player_limit}`,
       ''
     ];
 
@@ -766,13 +766,13 @@ function generateBalancedTeams(players10) {
     }
 
     // Totale score (lagere = beter)
-    // PRIORITEIT: 1) Posities, 2) Wilson totaal, 3) σ verschil
+    // PRIORITEIT: 1) Posities, 2) σ verschil, 3) Wilson totaal
     const score =
       defenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
       offenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
       keeperPenalty * 80.0 +     // #1 Keeper balans: zeer belangrijk
-      wilsonDiff * 60.0 +        // #2 Wilson totaal gelijk: belangrijk
-      stdDevDiff * 30.0;         // #3 σ verschil: laagste prioriteit
+      stdDevDiff * 150.0 +       // #2 σ verschil: VERHOOGD - teams moeten intern even gevarieerd zijn
+      wilsonDiff * 50.0;         // #3 Wilson totaal gelijk: belangrijk maar minder dan σ
 
     if (score < bestScore) {
       bestScore = score;
@@ -1188,7 +1188,7 @@ function cmdWedstrijden() {
       return 'ℹ️ Nog geen gespeelde wedstrijden.';
     }
 
-    const lines = ['📅 *Laatste Wedstrijden:*', ''];
+    const lines = ['📅 *Laatste 5nWedstrijden:*', ''];
 
     for (const match of matches) {
       // Haal teams op
