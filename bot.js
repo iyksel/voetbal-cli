@@ -722,7 +722,7 @@ function formatTeams(matchId) {
         return orderA - orderB;
       });
 
-      const lines = [`*${name}*`, `Wilson: ${(avg * 100).toFixed(1)}% `, ''];
+      const lines = [`*${name}*`,''];
       sorted.forEach(p => {
         // Individueel: ZONDER modifier (zichtbaar voor spelers)
         const w = wilsonScoreRaw(p);
