@@ -742,6 +742,7 @@ function formatTeams(matchId) {
  * 2. Maak 5 paren: (1e,2e), (3e,4e), (5e,6e), (7e,8e), (9e,10e)
  * 3. Elk team krijgt exact 1 speler uit elke tier
  * 4. Kies de verdeling (32 opties) die posities het beste balanceert
+ * 5. Extra: voorkom dat top-spelers of zwakke spelers samen in 1 team komen
  *
  * Dit garandeert dat beide teams vergelijkbare skill-spreiding hebben.
  */
@@ -803,7 +804,22 @@ function generateBalancedTeams(players10) {
     const wilsonB = teamB.reduce((s, p) => s + p.rate, 0);
     const wilsonDiff = Math.abs(wilsonA - wilsonB);
 
-    const score = defDiff * 100 + offDiff * 100 + keeperPenalty * 80 + wilsonDiff * 50;
+    // TOP-SPELERS BALANS: voorkom dat beste spelers (uit paar 0 en 1) samen in 1 team komen
+    // Tel de Wilson score van de top 2 spelers in elk team
+    const topPlayersA = teamA.filter(p => players.indexOf(p) < 4); // top 4 spelers
+    const topPlayersB = teamB.filter(p => players.indexOf(p) < 4);
+    const topWilsonA = topPlayersA.reduce((s, p) => s + p.rate, 0);
+    const topWilsonB = topPlayersB.reduce((s, p) => s + p.rate, 0);
+    const topDiff = Math.abs(topWilsonA - topWilsonB);
+
+    // ZWAKKE SPELERS BALANS: voorkom dat slechtste spelers (uit paar 3 en 4) samen in 1 team komen
+    const bottomPlayersA = teamA.filter(p => players.indexOf(p) >= 6); // bottom 4 spelers
+    const bottomPlayersB = teamB.filter(p => players.indexOf(p) >= 6);
+    const bottomWilsonA = bottomPlayersA.reduce((s, p) => s + p.rate, 0);
+    const bottomWilsonB = bottomPlayersB.reduce((s, p) => s + p.rate, 0);
+    const bottomDiff = Math.abs(bottomWilsonA - bottomWilsonB);
+
+    const score = defDiff * 100 + offDiff * 100 + keeperPenalty * 80 + wilsonDiff * 50 + topDiff * 200 + bottomDiff * 200;
 
     if (score < bestScore) {
       bestScore = score;
