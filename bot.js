@@ -1217,8 +1217,8 @@ function cmdWedstrijden() {
 
       // Bepaal winnaar indicator
       const witWon = match.winner_team === 'wit';
-      const witNames = wit.join(',');
-      const zwartNames = zwart.join(',');
+      const witNames = wit.join(' ,');
+      const zwartNames = zwart.join(' ,');
 
       // Format: dd/mm | Wit 2-0 Zwart (winnaar vet)
       if (witWon) {
@@ -1228,7 +1228,7 @@ function cmdWedstrijden() {
       }
     }
 
-    return lines.join('\n');
+    return lines.join('\n\n');
 }
 
 function cmdPositie(whatsappId, args) {
