@@ -1167,7 +1167,7 @@ function cmdLijst() {
     const lines = ['📊 *Spelers Ranking:*', ''];
     rows.slice(0, 30).forEach((r, i) => {
       const pct = ((r.wins / r.games) * 100).toFixed(0);
-      lines.push(`${i + 1}. ${r.display_name}${posLabel(r.position)} — ${pct}% (${r.wins}W/${r.games}G)`);
+      lines.push(`${i + 1}. ${r.display_name} — ${pct}% (${r.wins}/${r.games})`);
     });
 
     return lines.join('\n');
@@ -1308,7 +1308,7 @@ function cmdAddSpeler(args) {
     db.prepare(`UPDATE players SET position = ? WHERE id = ?`).run(position, p.id);
 
     const posLabel = { 'keeper': 'K', 'verdediger': 'V', 'middenveld': 'M', 'aanvaller': 'A' };
-    return `✅ Speler toegevoegd: ${p.display_name} [${posLabel[position]}]`;
+    return `✅ Speler toegevoegd: ${p.display_name}`;
 }
 
 function parseTimeOnlyRobust(str) {
