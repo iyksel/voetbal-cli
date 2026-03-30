@@ -542,7 +542,7 @@ function buildSignupResult(match, player, state, linkMessage) {
 
 function generateAndSaveTeams(matchId) {
     const rows = db.prepare(`
-      SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position
+      SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position, p.skill_modifier
       FROM match_players mp
       JOIN players p ON p.id = mp.player_id
       WHERE mp.match_id = ? AND mp.signup_state = 'ja' AND mp.is_waitlist = 0
@@ -672,7 +672,7 @@ function cmdTeams() {
 
     // Generate teams
     const rows = db.prepare(`
-      SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position
+      SELECT p.id as player_id, p.display_name, p.wins, p.games, p.position, p.skill_modifier
       FROM match_players mp
       JOIN players p ON p.id = mp.player_id
       WHERE mp.match_id = ? AND mp.signup_state = 'ja' AND mp.is_waitlist = 0
@@ -696,14 +696,14 @@ function cmdTeams() {
 
 function formatTeams(matchId) {
     const wit = db.prepare(`
-      SELECT p.display_name, p.wins, p.games, p.position
+      SELECT p.display_name, p.wins, p.games, p.position, p.skill_modifier
       FROM match_players mp
       JOIN players p ON p.id = mp.player_id
       WHERE mp.match_id = ? AND mp.team = 'wit'
     `).all(matchId);
 
     const zwart = db.prepare(`
-      SELECT p.display_name, p.wins, p.games, p.position
+      SELECT p.display_name, p.wins, p.games, p.position, p.skill_modifier
       FROM match_players mp
       JOIN players p ON p.id = mp.player_id
       WHERE mp.match_id = ? AND mp.team = 'zwart'
@@ -1547,8 +1547,9 @@ function cmdWhoAmI(whatsappId) {
 
     const posLabel = player.position ? ` [${player.position}]` : '';
     const wilson = player.games > 0 ? `${(wilsonScore(player) * 100).toFixed(1)}%` : 'Geen games';
+    const modifierText = player.skill_modifier ? ` (modifier: ${player.skill_modifier > 0 ? '+' : ''}${(player.skill_modifier * 100).toFixed(0)}%)` : '';
 
-    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson} - ${player.wins}W/${player.games}G\nWhatsApp ID: \`${whatsappId}\``;
+    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson}${modifierText} - ${player.wins}W/${player.games}G\nWhatsApp ID: \`${whatsappId}\``;
 }
 
 function cmdDebug(whatsappId) {
