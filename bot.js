@@ -672,14 +672,10 @@ function formatTeams(matchId) {
     `).all(matchId);
 
     const formatTeam = (team, name) => {
-      // Bereken stats
-      const playersWithRate = team.map(p => ({ ...p, rate: wilsonScore(p) }));
-      const rates = playersWithRate.map(p => p.rate);
+      const rates = team.map(p => wilsonScore(p));
       const avg = rates.reduce((s, r) => s + r, 0) / rates.length;
       const variance = rates.reduce((s, r) => s + Math.pow(r - avg, 2), 0) / rates.length;
       const stdDev = Math.sqrt(variance);
-      const defense = calcDefensiveStrength(playersWithRate);
-      const offense = calcOffensiveStrength(playersWithRate);
 
       const posLabel = (pos) => {
         if (!pos) return '?';
@@ -691,21 +687,16 @@ function formatTeams(matchId) {
       };
 
       const posOrder = { 'keeper': 1, 'verdediger': 2, 'middenveld': 3, 'aanvaller': 4 };
-      const sorted = playersWithRate.slice().sort((a, b) => {
+      const sorted = team.slice().sort((a, b) => {
         const orderA = posOrder[a.position] || 99;
         const orderB = posOrder[b.position] || 99;
         return orderA - orderB;
       });
 
-      const lines = [
-        `*${name}*`,
-        `W: ${(avg * 100).toFixed(0)}% | σ: ${(stdDev * 100).toFixed(0)}% | DEF: ${defense.toFixed(1)} | OFF: ${offense.toFixed(1)}`,
-        ''
-      ];
-
+      const lines = [`*${name}*`, `Wilson: ${(avg * 100).toFixed(1)}% (σ=${(stdDev * 100).toFixed(1)}%)`, ''];
       sorted.forEach(p => {
-        const w = p.rate;
-        lines.push(`[${posLabel(p.position)}] ${p.display_name} (${(w * 100).toFixed(0)}%)`);
+        const w = wilsonScore(p);
+        lines.push(`- ${p.display_name} (${(w * 100).toFixed(0)}% | ${p.wins}/${p.games})`);
       });
 
       return lines.join('\n');
@@ -808,80 +799,6 @@ function generateBalancedTeams(players10) {
     defenseDiff: best.defenseDiff,
     offenseDiff: best.offenseDiff
   };
-}
-
-// -------------------- TEAMS --------------------
-function combinations(arr, k) {
-  const ret = [];
-  const n = arr.length;
-  function rec(start, comb) {
-    if (comb.length === k) { ret.push(comb.slice()); return; }
-    for (let i = start; i < n; i++) {
-      comb.push(arr[i]);
-      rec(i + 1, comb);
-      comb.pop();
-    }
-  }
-  rec(0, []);
-  return ret;
-}
-
-/**
- * Bereken defensive strength van een team.
- * Keeper: 100% defense, Verdediger: 100%, Middenveld: 50%, Aanvaller: 0%
- */
-function calcDefensiveStrength(team) {
-  let strength = 0;
-  for (const p of team) {
-    if (p.position === 'keeper') strength += 1.0;
-    else if (p.position === 'verdediger') strength += 1.0;
-    else if (p.position === 'middenveld') strength += 0.5;
-    // aanvaller en onbekend: 0
-  }
-  return strength;
-}
-
-/**
- * Bereken offensive strength van een team.
- * Aanvaller: 100%, Middenveld: 50%, Verdediger: 0%, Keeper: 0%
- */
-function calcOffensiveStrength(team) {
-  let strength = 0;
-  for (const p of team) {
-    if (p.position === 'aanvaller') strength += 1.0;
-    else if (p.position === 'middenveld') strength += 0.5;
-    // verdediger, keeper en onbekend: 0
-  }
-  return strength;
-}
-
-/**
- * Tel aantal keepers in team
- */
-function countKeepers(team) {
-  return team.filter(p => p.position === 'keeper').length;
-}
-
-/**
- * Bereken standaarddeviatie van Wilson scores binnen een team.
- * Lagere stddev = meer balanced team (geen superstars + zwakke spelers)
- */
-function calcWilsonStdDev(team) {
-  const rates = team.map(p => p.rate);
-  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
-  const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
-  return Math.sqrt(variance);
-}
-
-/**
- * Bereken variance van Wilson scores binnen een team.
- * Gebruikt variance (stddev²) voor exponentiële penalty op hoge spreiding.
- */
-function calcWilsonVariance(team) {
-  const rates = team.map(p => p.rate);
-  const mean = rates.reduce((s, r) => s + r, 0) / rates.length;
-  const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
-  return variance;
 }
 
 // -------------------- TEAMS --------------------
