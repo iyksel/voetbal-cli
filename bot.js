@@ -706,98 +706,85 @@ function formatTeams(matchId) {
 }
 
 /**
- * Verbeterd team balancing algoritme:
- * Balanceert op 4 dimensies:
- * 1. Wilson score (skill level) - GEMIDDELDE
- * 2. Wilson spreiding (standaarddeviatie) - INTERN BALANCED
- * 3. Defensive strength (met middenveld als 50%)
- * 4. Offensive strength (met middenveld als 50%)
+ * Tier-pairing team balancing:
  *
- * Keeper mis-match krijgt extra zware penalty.
+ * 1. Sorteer spelers op Wilson score (hoog → laag)
+ * 2. Maak 5 paren: (1e,2e), (3e,4e), (5e,6e), (7e,8e), (9e,10e)
+ * 3. Elk team krijgt exact 1 speler uit elke tier
+ * 4. Kies de verdeling (32 opties) die posities het beste balanceert
+ *
+ * Dit garandeert dat beide teams vergelijkbare skill-spreiding hebben.
  */
 function generateBalancedTeams(players10) {
   const players = players10.map(p => ({ ...p, rate: wilsonScore(p) }));
 
-  // Bereken totalen voor alle spelers
-  const totalWilson = players.reduce((s, p) => s + p.rate, 0);
-  const totalDefense = calcDefensiveStrength(players);
-  const totalOffense = calcOffensiveStrength(players);
-  const totalKeepers = countKeepers(players);
+  // Sorteer op Wilson score (hoog → laag)
+  players.sort((a, b) => b.rate - a.rate);
 
-  const combs = combinations(players, 5);
-  let best = null;
+  // Maak 5 paren: [0,1], [2,3], [4,5], [6,7], [8,9]
+  const pairs = [];
+  for (let i = 0; i < 10; i += 2) {
+    pairs.push([players[i], players[i + 1]]);
+  }
+
+  // Probeer alle 2^5 = 32 combinaties
+  // Bit i = 0: pair[i][0] → teamA, pair[i][1] → teamB
+  // Bit i = 1: pair[i][0] → teamB, pair[i][1] → teamA
+  let bestTeamA = null;
+  let bestTeamB = null;
   let bestScore = Infinity;
 
-  for (const teamA of combs) {
-    const teamB = players.filter(p => !teamA.some(a => a.player_id === p.player_id));
+  for (let mask = 0; mask < 32; mask++) {
+    const teamA = [];
+    const teamB = [];
 
-    // 1. Wilson score balans (target: 50% elk)
-    const wilsonA = teamA.reduce((s, p) => s + p.rate, 0);
-    const wilsonDiff = Math.abs(wilsonA - (totalWilson / 2));
+    for (let i = 0; i < 5; i++) {
+      if ((mask >> i) & 1) {
+        teamA.push(pairs[i][1]);
+        teamB.push(pairs[i][0]);
+      } else {
+        teamA.push(pairs[i][0]);
+        teamB.push(pairs[i][1]);
+      }
+    }
 
-    // 2. Wilson spreiding: σ moet GELIJK zijn tussen beide teams
-    const stdDevA = calcWilsonStdDev(teamA);
-    const stdDevB = calcWilsonStdDev(teamB);
-    // Verschil in σ tussen teams = moet minimaal zijn
-    const stdDevDiff = Math.abs(stdDevA - stdDevB);
+    // Score op positie balans
+    const defA = calcDefensiveStrength(teamA);
+    const defB = calcDefensiveStrength(teamB);
+    const offA = calcOffensiveStrength(teamA);
+    const offB = calcOffensiveStrength(teamB);
 
-    // 3. Defensive strength balans
-    const defenseA = calcDefensiveStrength(teamA);
-    const defenseDiff = Math.abs(defenseA - (totalDefense / 2));
+    const defDiff = Math.abs(defA - defB);
+    const offDiff = Math.abs(offA - offB);
 
-    // 4. Offensive strength balans
-    const offenseA = calcOffensiveStrength(teamA);
-    const offenseDiff = Math.abs(offenseA - (totalOffense / 2));
-
-    // Keeper balans (probeer gelijk te verdelen)
+    // Keeper balans
     const keepersA = countKeepers(teamA);
     const keepersB = countKeepers(teamB);
+    const totalKeepers = keepersA + keepersB;
     let keeperPenalty = 0;
-
     if (totalKeepers === 2) {
-      // Ideaal: 1-1 verdeling
-      keeperPenalty = (keepersA !== 1) ? 15 : 0;
-    } else if (totalKeepers === 1) {
-      // Acceptabel: 1-0 verdeling (geen penalty)
-      keeperPenalty = 0;
+      keeperPenalty = (keepersA !== 1) ? 10 : 0;
     } else if (totalKeepers > 2) {
-      // Probeer zo gelijk mogelijk te verdelen
       keeperPenalty = Math.abs(keepersA - keepersB) * 5;
     }
 
-    // Totale score (lagere = beter)
-    // PRIORITEIT: 1) Posities, 2) σ verschil, 3) Wilson totaal
-    const score =
-      defenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
-      offenseDiff * 100.0 +      // #1 Positie balans: HOOGSTE prioriteit
-      keeperPenalty * 80.0 +     // #1 Keeper balans: zeer belangrijk
-      stdDevDiff * 50.0 +       // #2 σ verschil: VERHOOGD - teams moeten intern even gevarieerd zijn
-      wilsonDiff * 80.0;         // #3 Wilson totaal gelijk: belangrijk maar minder dan σ
+    // Wilson diff (zou klein moeten zijn door pairing)
+    const wilsonA = teamA.reduce((s, p) => s + p.rate, 0);
+    const wilsonB = teamB.reduce((s, p) => s + p.rate, 0);
+    const wilsonDiff = Math.abs(wilsonA - wilsonB);
+
+    const score = defDiff * 100 + offDiff * 100 + keeperPenalty * 80 + wilsonDiff * 50;
 
     if (score < bestScore) {
       bestScore = score;
-      best = {
-        teamA,
-        teamB,
-        wilsonDiff,
-        stdDevDiff,
-        stdDevA,
-        stdDevB,
-        defenseDiff,
-        offenseDiff,
-        keepersA,
-        keepersB
-      };
+      bestTeamA = teamA.slice();
+      bestTeamB = teamB.slice();
     }
   }
 
   return {
-    teamWit: best.teamA,
-    teamZwart: best.teamB,
-    diff: best.wilsonDiff,
-    stdDevDiff: best.stdDevDiff,
-    defenseDiff: best.defenseDiff,
-    offenseDiff: best.offenseDiff
+    teamWit: bestTeamA,
+    teamZwart: bestTeamB
   };
 }
 
