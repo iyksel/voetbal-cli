@@ -676,14 +676,10 @@ function formatTeams(matchId) {
       const playersWithRate = team.map(p => ({ ...p, rate: wilsonScore(p) }));
       const rates = playersWithRate.map(p => p.rate);
       const avg = rates.reduce((s, r) => s + r, 0) / rates.length;
+      const variance = rates.reduce((s, r) => s + Math.pow(r - avg, 2), 0) / rates.length;
+      const stdDev = Math.sqrt(variance);
       const defense = calcDefensiveStrength(playersWithRate);
       const offense = calcOffensiveStrength(playersWithRate);
-
-      // σ per positietype
-      const defPlayers = playersWithRate.filter(p => p.position === 'keeper' || p.position === 'verdediger');
-      const offPlayers = playersWithRate.filter(p => p.position === 'middenveld' || p.position === 'aanvaller');
-      const defStdDev = calcStdDevForGroup(defPlayers);
-      const offStdDev = calcStdDevForGroup(offPlayers);
 
       const posLabel = (pos) => {
         if (!pos) return '?';
@@ -703,8 +699,7 @@ function formatTeams(matchId) {
 
       const lines = [
         `*${name}*`,
-        `W: ${(avg * 100).toFixed(0)}% | DEF: ${defense.toFixed(1)} | OFF: ${offense.toFixed(1)}`,
-        `σDEF: ${(defStdDev * 100).toFixed(0)}% | σOFF: ${(offStdDev * 100).toFixed(0)}%`,
+        `W: ${(avg * 100).toFixed(0)}% | σ: ${(stdDev * 100).toFixed(0)}% | DEF: ${defense.toFixed(1)} | OFF: ${offense.toFixed(1)}`,
         ''
       ];
 
@@ -888,6 +883,7 @@ function calcWilsonVariance(team) {
   const variance = rates.reduce((s, r) => s + Math.pow(r - mean, 2), 0) / rates.length;
   return variance;
 }
+
 // -------------------- TEAMS --------------------
 function combinations(arr, k) {
   const ret = [];
