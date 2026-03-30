@@ -7,6 +7,27 @@ const chrono = require('chrono-node');
 const db = new Database('voetbal.db');
 db.pragma('foreign_keys = ON');
 
+// ==================== DATABASE MIGRATIONS ====================
+// Add skill_modifier column if it doesn't exist
+try {
+  db.prepare(`ALTER TABLE players ADD COLUMN skill_modifier REAL DEFAULT 0`).run();
+  console.log('✅ skill_modifier kolom toegevoegd aan players tabel');
+} catch (e) {
+  // Column already exists, ignore
+}
+
+// Set initial skill modifiers for known players
+// BOOST: Gokdeniz, Seymen, Ardenis, Mikail (+0.08 = +8%)
+// NERF: Mo-emre, Ahmet, Emre-b, Mehmet, Enver, Isaac (-0.08 = -8%)
+const SKILL_MODIFIERS = {
+  boost: ['gokdeniz', 'seymen', 'ardenis', 'mikail'],
+  nerf: ['mo-emre', 'ahmet', 'emre-b', 'mehmet', 'enver', 'isaac']
+};
+
+const updateModifier = db.prepare(`UPDATE players SET skill_modifier = ? WHERE name_normalized = ?`);
+SKILL_MODIFIERS.boost.forEach(name => updateModifier.run(0.08, name));
+SKILL_MODIFIERS.nerf.forEach(name => updateModifier.run(-0.08, name));
+
 // ==================== CONFIGURATIE ====================
 const CONFIG = {
   playerLimit: 10,
@@ -97,6 +118,7 @@ client.on('message', async msg => {
         else if (cmd === '/help') response = cmdHelp();
         else if (cmd === '/whoami') response = cmdWhoAmI(whatsappId);
         else if (cmd === '/debug') response = cmdDebug(whatsappId);
+        else if (cmd === '/modifier') response = cmdModifier(args);
     } catch (err) {
         response = `❌ ${err.message}`;
     }
@@ -273,7 +295,10 @@ function pureWinrate(p) {
  *  - Veel games   → score nadert echte winrate
  *  - 0 games      → 0.25 (conservatieve startwaarde)
  */
-function wilsonScore(p) {
+/**
+ * Pure Wilson Score Lower Bound (zonder modifier)
+ */
+function wilsonScoreRaw(p) {
   if (!p.games) return 0.25;
   const n = p.games;
   const phat = p.wins / n;
@@ -283,6 +308,18 @@ function wilsonScore(p) {
   const centre = phat + z2 / (2 * n);
   const margin = z * Math.sqrt((phat * (1 - phat)) / n + z2 / (4 * n * n));
   return (centre - margin) / denom;
+}
+
+/**
+ * Wilson Score met skill_modifier toegepast
+ * - skill_modifier van +0.08 = 8% boost
+ * - skill_modifier van -0.08 = 8% nerf
+ * Geclipt tussen 0.05 en 0.95 om extreme waarden te voorkomen
+ */
+function wilsonScore(p) {
+  const raw = wilsonScoreRaw(p);
+  const modifier = p.skill_modifier || 0;
+  return Math.max(0.05, Math.min(0.95, raw + modifier));
 }
 
 // ==================== COMMAND HANDLERS ====================
@@ -316,6 +353,7 @@ function cmdHelp() {
 ⚙️ Spelers:
 /addspeler <naam> <positie> - Voeg toe (K/V/M/A)
 /positie <pos> - Stel je positie in
+/modifier <naam> <+/-waarde> - Pas skill modifier aan
 /whoami - Test je link
 /debug - Debug linking info
 /help - Dit bericht`;
@@ -1536,6 +1574,62 @@ function cmdDebug(whatsappId) {
     }
 
     return result;
+}
+
+/**
+ * /modifier <naam> <+/-waarde> - Pas skill modifier aan
+ * Bijv: /modifier ahmet -5 (nerf met 5%)
+ *       /modifier mikail +10 (boost met 10%)
+ *       /modifier ahmet 0 (reset naar normaal)
+ */
+function cmdModifier(args) {
+    if (args.length < 2) {
+        // Toon huidige modifiers
+        const players = db.prepare(`
+            SELECT display_name, skill_modifier, wins, games
+            FROM players
+            WHERE skill_modifier != 0
+            ORDER BY skill_modifier DESC
+        `).all();
+
+        if (players.length === 0) {
+            return `⚙️ *Skill Modifiers*\n\nGeen spelers met aangepaste modifiers.\n\nGebruik: /modifier <naam> <+/-waarde>\nBijv: /modifier ahmet -5`;
+        }
+
+        let result = `⚙️ *Skill Modifiers:*\n\n`;
+        players.forEach(p => {
+            const sign = p.skill_modifier >= 0 ? '+' : '';
+            const pct = (p.skill_modifier * 100).toFixed(0);
+            result += `• ${p.display_name}: ${sign}${pct}%\n`;
+        });
+        result += `\nGebruik: /modifier <naam> <waarde>`;
+        return result;
+    }
+
+    const value = args.pop();
+    const name = args.join(' ').trim();
+
+    if (!name) throw new Error('Gebruik: /modifier <naam> <+/-waarde>');
+
+    // Parse modifier value (accept +5, -5, 5, etc)
+    const numValue = parseFloat(value.replace(/[+%]/g, ''));
+    if (isNaN(numValue) || numValue < -30 || numValue > 30) {
+        throw new Error('Modifier moet tussen -30 en +30 zijn.');
+    }
+
+    const modifier = numValue / 100; // Convert to decimal
+
+    const player = db.prepare(`SELECT * FROM players WHERE name_normalized = ?`).get(normalizeName(name));
+    if (!player) throw new Error(`Speler "${name}" niet gevonden.`);
+
+    db.prepare(`UPDATE players SET skill_modifier = ? WHERE id = ?`).run(modifier, player.id);
+
+    const sign = modifier >= 0 ? '+' : '';
+    const pct = (modifier * 100).toFixed(0);
+    const rawWilson = (wilsonScoreRaw(player) * 100).toFixed(1);
+    const newEffective = ((wilsonScoreRaw(player) + modifier) * 100).toFixed(1);
+
+    return `✅ Modifier voor *${player.display_name}* aangepast naar ${sign}${pct}%\n\nWilson: ${rawWilson}% → Effectief: ${newEffective}%`;
 }
 
 // Graceful shutdown
