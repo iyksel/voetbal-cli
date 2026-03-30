@@ -353,7 +353,6 @@ function cmdHelp() {
 ⚙️ Spelers:
 /addspeler <naam> <positie> - Voeg toe (K/V/M/A)
 /positie <pos> - Stel je positie in
-/modifier <naam> <+/-waarde> - Pas skill modifier aan
 /whoami - Test je link
 /debug - Debug linking info
 /help - Dit bericht`;
@@ -710,19 +709,11 @@ function formatTeams(matchId) {
     `).all(matchId);
 
     const formatTeam = (team, name) => {
-      const rates = team.map(p => wilsonScore(p));
-      const avg = rates.reduce((s, r) => s + r, 0) / rates.length;
-      const variance = rates.reduce((s, r) => s + Math.pow(r - avg, 2), 0) / rates.length;
+      // Team totaal: MET modifier (intern)
+      const ratesWithMod = team.map(p => wilsonScore(p));
+      const avg = ratesWithMod.reduce((s, r) => s + r, 0) / ratesWithMod.length;
+      const variance = ratesWithMod.reduce((s, r) => s + Math.pow(r - avg, 2), 0) / ratesWithMod.length;
       const stdDev = Math.sqrt(variance);
-
-      const posLabel = (pos) => {
-        if (!pos) return '?';
-        if (pos === 'keeper') return 'K';
-        if (pos === 'verdediger') return 'V';
-        if (pos === 'middenveld') return 'M';
-        if (pos === 'aanvaller') return 'A';
-        return '?';
-      };
 
       const posOrder = { 'keeper': 1, 'verdediger': 2, 'middenveld': 3, 'aanvaller': 4 };
       const sorted = team.slice().sort((a, b) => {
@@ -731,9 +722,10 @@ function formatTeams(matchId) {
         return orderA - orderB;
       });
 
-      const lines = [`*${name}*`, `Wilson: ${(avg * 100).toFixed(1)}% (σ=${(stdDev * 100).toFixed(1)}%)`, ''];
+      const lines = [`*${name}*`, `Wilson: ${(avg * 100).toFixed(1)}% `, ''];
       sorted.forEach(p => {
-        const w = wilsonScore(p);
+        // Individueel: ZONDER modifier (zichtbaar voor spelers)
+        const w = wilsonScoreRaw(p);
         lines.push(`- ${p.display_name} (${(w * 100).toFixed(0)}% | ${p.wins}/${p.games})`);
       });
 
@@ -1546,10 +1538,10 @@ function cmdWhoAmI(whatsappId) {
     }
 
     const posLabel = player.position ? ` [${player.position}]` : '';
-    const wilson = player.games > 0 ? `${(wilsonScore(player) * 100).toFixed(1)}%` : 'Geen games';
-    const modifierText = player.skill_modifier ? ` (modifier: ${player.skill_modifier > 0 ? '+' : ''}${(player.skill_modifier * 100).toFixed(0)}%)` : '';
+    // Toon originele Wilson score (zonder modifier)
+    const wilson = player.games > 0 ? `${(wilsonScoreRaw(player) * 100).toFixed(1)}%` : 'Geen games';
 
-    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson}${modifierText} - ${player.wins}W/${player.games}G\nWhatsApp ID: \`${whatsappId}\``;
+    return `✅ Je bent gelinkt als: *${player.display_name}*${posLabel}\n\nStats: ${wilson} - ${player.wins}W/${player.games}G\nWhatsApp ID: \`${whatsappId}\``;
 }
 
 function cmdDebug(whatsappId) {
