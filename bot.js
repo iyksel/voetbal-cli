@@ -999,7 +999,7 @@ function cmdLijst() {
 }
 
 function cmdWedstrijden() {
-    // Alleen closed matches, laatste 5
+    // Laatste 5 wedstrijden, nieuwste eerst
     const matches = db.prepare(`
       SELECT m.id, m.match_date, mr.winner_team, mr.score
       FROM matches m
@@ -1013,7 +1013,7 @@ function cmdWedstrijden() {
       return 'ℹ️ Nog geen gespeelde wedstrijden.';
     }
 
-    const lines = ['📅 *Laatste 5nWedstrijden:*', ''];
+    const lines = ['📅 *Laatste 5 Wedstrijden:*', ''];
 
     for (const match of matches) {
       // Haal teams op
