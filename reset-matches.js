@@ -39,43 +39,51 @@ console.log('');
 // Format: { datum: 'YYYY-MM-DD', tijd: 'HH:MM', teamA: ['speler1', ...], scoreA: X, teamB: ['speler2', ...], scoreB: Y }
 const wedstrijden = [
   {
-    datum: '2025-01-25',
+    datum: '2025-03-22',
     tijd: '21:00',
-    teamA: ['Selo', 'Turan', 'Gokdeniz', 'Emirhan', 'Ramazan'],
-    scoreA: 1,
-    teamB: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Arjan'],
-    scoreB: 0
-  },
-  {
-    datum: '2025-01-29',
-    tijd: '21:00',
-    teamA: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Arjan'],
+    teamA: ['Selo', 'Turan', 'Salim', 'Seymen', 'Emre-b'],
     scoreA: 0,
-    teamB: ['Selo', 'Turan', 'Gokdeniz', 'Emirhan', 'Ramazan'],
-    scoreB: 1
-  },
-  {
-    datum: '2025-02-03',
-    tijd: '21:00',
-    teamA: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Roberto'],
-    scoreA: 0,
-    teamB: ['Gokdeniz', 'Seymen', 'Fahri', 'Emre-b', 'Mikail'],
+    teamB: ['Izzet', 'Ilkay', 'Gokdeniz', 'Ramazan', 'Samet'],
     scoreB: 4
   },
   {
-    datum: '2025-02-10',
+    datum: '2025-03-17',
     tijd: '21:00',
-    teamA: ['Selo', 'Gokdeniz', 'Erhan', 'Salim', 'Samet'],
+    teamA: ['Gokdeniz', 'Ramazan', 'Seymen', 'Samet', 'Mehmet'],
     scoreA: 0,
-    teamB: ['Turan', 'Ramazan', 'Ilkay', 'Seymen', 'Fahri'],
-    scoreB: 2
+    teamB: ['Salim', 'Selo', 'Turan', 'Emre-b', 'Mikail'],
+    scoreB: 5
   },
   {
-    datum: '2025-02-12',
+    datum: '2025-03-15',
     tijd: '21:00',
-    teamA: ['Izzet', 'Salim', 'Seymen', 'Isaac', 'Mehmet-s'],
+    teamA: ['Selo', 'Izzet', 'Ilkay', 'Seymen', 'Mehmet'],
     scoreA: 0,
-    teamB: ['Gokdeniz', 'Ramazan', 'Ilkay', 'Ahmet', 'Fahri'],
+    teamB: ['Salim', 'Emre-b', 'Enver', 'Gokdeniz', 'Ramazan'],
+    scoreB: 1
+  },
+  {
+    datum: '2025-03-10',
+    tijd: '21:00',
+    teamA: ['Ramazan', 'Ilkay', 'Ahmet', 'Samet', 'Ardenis'],
+    scoreA: 2,
+    teamB: ['Turan', 'Gokdeniz', 'Izzet', 'Salim', 'Emre-b'],
+    scoreB: 0
+  },
+  {
+    datum: '2025-03-05',
+    tijd: '21:00',
+    teamA: ['Ilkay', 'Izzet', 'Samet', 'Enver', 'Mehmet'],
+    scoreA: 0,
+    teamB: ['Selo', 'Turan', 'Ramazan', 'Erhan', 'Salim'],
+    scoreB: 3
+  },
+  {
+    datum: '2025-03-03',
+    tijd: '21:00',
+    teamA: ['Ilkay', 'Gokdeniz', 'Erhan', 'Izzet', 'Ahmet'],
+    scoreA: 0,
+    teamB: ['Selo', 'Salim', 'Seymen', 'Samet', 'Mehmet'],
     scoreB: 1
   },
   {
@@ -87,52 +95,44 @@ const wedstrijden = [
     scoreB: 0
   },
   {
-    datum: '2025-03-03',
+    datum: '2025-02-12',
     tijd: '21:00',
-    teamA: ['Ilkay', 'Gokdeniz', 'Erhan', 'Izzet', 'Ahmet'],
+    teamA: ['Izzet', 'Salim', 'Seymen', 'Isaac', 'Mehmet-s'],
     scoreA: 0,
-    teamB: ['Selo', 'Salim', 'Seymen', 'Samet', 'Mehmet'],
+    teamB: ['Gokdeniz', 'Ramazan', 'Ilkay', 'Ahmet', 'Fahri'],
     scoreB: 1
   },
   {
-    datum: '2025-03-05',
+    datum: '2025-02-10',
     tijd: '21:00',
-    teamA: ['Ilkay', 'Izzet', 'Samet', 'Enver', 'Mehmet'],
+    teamA: ['Selo', 'Gokdeniz', 'Erhan', 'Salim', 'Samet'],
     scoreA: 0,
-    teamB: ['Selo', 'Turan', 'Ramazan', 'Erhan', 'Salim'],
-    scoreB: 3
+    teamB: ['Turan', 'Ramazan', 'Ilkay', 'Seymen', 'Fahri'],
+    scoreB: 2
   },
   {
-    datum: '2025-03-10',
+    datum: '2025-02-03',
     tijd: '21:00',
-    teamA: ['Ramazan', 'Ilkay', 'Ahmet', 'Samet', 'Ardenis'],
-    scoreA: 2,
-    teamB: ['Turan', 'Gokdeniz', 'Izzet', 'Salim', 'Emre-b'],
-    scoreB: 0
-  },
-  {
-    datum: '2025-03-15',
-    tijd: '21:00',
-    teamA: ['Selo', 'Izzet', 'Ilkay', 'Seymen', 'Mehmet'],
+    teamA: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Roberto'],
     scoreA: 0,
-    teamB: ['Salim', 'Emre-b', 'Enver', 'Gokdeniz', 'Ramazan'],
-    scoreB: 1
-  },
-  {
-    datum: '2025-03-17',
-    tijd: '21:00',
-    teamA: ['Gokdeniz', 'Ramazan', 'Seymen', 'Samet', 'Mehmet'],
-    scoreA: 0,
-    teamB: ['Salim', 'Selo', 'Turan', 'Emre-b', 'Mikail'],
-    scoreB: 5
-  },
-  {
-    datum: '2025-03-22',
-    tijd: '21:00',
-    teamA: ['Selo', 'Turan', 'Salim', 'Seymen', 'Emre-b'],
-    scoreA: 0,
-    teamB: ['Izzet', 'Ilkay', 'Gokdeniz', 'Ramazan', 'Samet'],
+    teamB: ['Gokdeniz', 'Seymen', 'Fahri', 'Emre-b', 'Mikail'],
     scoreB: 4
+  },
+  {
+    datum: '2025-01-29',
+    tijd: '21:00',
+    teamA: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Arjan'],
+    scoreA: 0,
+    teamB: ['Selo', 'Turan', 'Gokdeniz', 'Emirhan', 'Ramazan'],
+    scoreB: 1
+  },
+  {
+    datum: '2025-01-25',
+    tijd: '21:00',
+    teamA: ['Selo', 'Turan', 'Gokdeniz', 'Emirhan', 'Ramazan'],
+    scoreA: 1,
+    teamB: ['Erhan', 'Izzet', 'Salim', 'Ilkay', 'Arjan'],
+    scoreB: 0
   }
 ];
 

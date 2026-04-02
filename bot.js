@@ -999,21 +999,21 @@ function cmdLijst() {
 }
 
 function cmdWedstrijden() {
-    // Laatste 5 wedstrijden, nieuwste eerst
+    // Alle wedstrijden, chronologisch (oudste eerst)
     const matches = db.prepare(`
       SELECT m.id, m.match_date, mr.winner_team, mr.score
       FROM matches m
       LEFT JOIN match_results mr ON mr.match_id = m.id
       WHERE m.status = 'closed'
-      ORDER BY m.starts_at ASC
-      LIMIT 5
+      ORDER BY m.starts_at DESC
+      limit 5
     `).all();
 
     if (matches.length === 0) {
       return 'ℹ️ Nog geen gespeelde wedstrijden.';
     }
 
-    const lines = ['📅 *Laatste 5 Wedstrijden:*', ''];
+    const lines = ['📅 *laatste 5 Wedstrijden:*', ''];
 
     for (const match of matches) {
       // Haal teams op
