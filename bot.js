@@ -40,6 +40,61 @@ const CONFIG = {
   WHATSAPP_GROUP_ID: null // Bijv: '1234567890-1234567890@g.us'
 };
 
+// ==================== ROLLEN & PERMISSIES ====================
+const ROLES = {
+  superadmin: ['49564241363102@lid'],
+  adminspelers: ['194373677539333@lid', '132233469948062@lid', '271021210914860@lid']
+};
+
+function getRole(whatsappId) {
+  if (ROLES.superadmin.includes(whatsappId)) return 'superadmin';
+  if (ROLES.adminspelers.includes(whatsappId)) return 'adminspelers';
+  return 'speler';
+}
+
+// Commando's per rol
+const SPELER_COMMANDS = ['/ja', '/nee', '/kan', '/play', '/edit', '/status', '/wedstrijden', '/lijst'];
+const ADMIN_COMMANDS = [...SPELER_COMMANDS, '/witwon', '/zwartwon', '/cancel'];
+// Superadmin mag alles
+
+function checkPermission(whatsappId, cmd, args = []) {
+  const role = getRole(whatsappId);
+
+  // Superadmin mag alles
+  if (role === 'superadmin') return { allowed: true };
+
+  // Adminspelers
+  if (role === 'adminspelers') {
+    if (ADMIN_COMMANDS.includes(cmd)) return { allowed: true };
+    // /ja en /nee met naam: adminspelers mogen iedereen toevoegen
+    if ((cmd === '/ja' || cmd === '/nee' || cmd === '/kan') && args.length > 0) return { allowed: true };
+    return { allowed: false };
+  }
+
+  // Spelers
+  if (SPELER_COMMANDS.includes(cmd)) {
+    // /ja, /nee, /kan met naam: alleen als naam in DB zit EN niet gelinkt aan WhatsApp
+    if ((cmd === '/ja' || cmd === '/nee' || cmd === '/kan') && args.length > 0) {
+      const name = args.join(' ');
+      const norm = normalizeName(name);
+      const player = db.prepare(`SELECT * FROM players WHERE name_normalized = ?`).get(norm);
+
+      // Moet in database zitten
+      if (!player) {
+        return { allowed: false, reason: 'Geen admin: niet mogelijk' };
+      }
+      // Mag niet gelinkt zijn aan een WhatsApp ID
+      if (player.whatsapp_id) {
+        return { allowed: false, reason: 'Geen admin: niet mogelijk' };
+      }
+      return { allowed: true };
+    }
+    return { allowed: true };
+  }
+
+  return { allowed: false };
+}
+
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -94,6 +149,14 @@ client.on('message', async msg => {
     console.log(`   Raw text: "${text}"`);
     console.log(`   Command: "${cmd}"`);
     console.log(`   Args: [${args.map(a => `"${a}"`).join(', ')}]`);
+    console.log(`   Role: ${getRole(whatsappId)}`);
+
+    // Check permissies
+    const perm = checkPermission(whatsappId, cmd, args);
+    if (!perm.allowed) {
+        msg.reply(perm.reason || 'Geen admin: niet mogelijk');
+        return;
+    }
 
     let response = null;
 
@@ -216,12 +279,13 @@ function ensurePlayerByName(name, isGuest = 0) {
   if (p) return p;
 
   const display = titleCaseWords(norm);
+  // Nieuwe speler: positie M (middenveld), skill_modifier 0.25 (25%)
   const info = db.prepare(`
-    INSERT INTO players (display_name, name_normalized, is_guest, created_at)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO players (display_name, name_normalized, is_guest, position, skill_modifier, created_at)
+    VALUES (?, ?, ?, 'middenveld', 0.25, ?)
   `).run(display, norm, isGuest, nowMs());
 
-  return { id: info.lastInsertRowid, display_name: display, name_normalized: norm, wins: 0, games: 0 };
+  return { id: info.lastInsertRowid, display_name: display, name_normalized: norm, wins: 0, games: 0, position: 'middenveld', skill_modifier: 0.25 };
 }
 
 /**
