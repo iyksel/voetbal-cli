@@ -1005,7 +1005,7 @@ function cmdWedstrijden() {
       FROM matches m
       LEFT JOIN match_results mr ON mr.match_id = m.id
       WHERE m.status = 'closed'
-      ORDER BY m.starts_at DESC
+      ORDER BY m.starts_at ASC
       LIMIT 5
     `).all();
 
