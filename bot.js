@@ -106,8 +106,6 @@ client.on('message', async msg => {
         else if (cmd === '/teams') response = cmdTeams();
         else if (cmd === '/witwon') response = cmdWin('wit', args);
         else if (cmd === '/zwartwon') response = cmdWin('zwart', args);
-        else if (cmd === '/mvp') response = cmdMvp(whatsappId, args);
-        else if (cmd === '/mvps') response = cmdMvps();
         else if (cmd === '/lijst') response = cmdLijst();
         else if (cmd === '/wedstrijden') response = cmdWedstrijden();
         else if (cmd === '/positie') response = cmdPositie(whatsappId, args);
@@ -347,8 +345,6 @@ function cmdHelp() {
 /cancel - Annuleer match
 /witwon [score] - Wit won (bijv: /witwon 4-0)
 /zwartwon [score] - Zwart won (bijv: /zwartwon 2-1)
-/mvp <naam> - Stem voor MVP
-/mvps - MVP leaderboard
 
 ⚙️ Spelers:
 /addspeler <naam> <positie> - Voeg toe (K/V/M/A)
@@ -960,213 +956,9 @@ function cmdWin(team, args) {
     });
     tx();
 
-    // Schedule MVP voting end (2 uur na resultaat)
-    scheduleMvpEnd(m.id);
-
     const teamLabel = team.charAt(0).toUpperCase() + team.slice(1);
     const scoreText = score ? ` met ${score}` : '';
-    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\n⏰ MVP stemmen open voor 2 uur (of tot 10 stemmen / 6+ voor iemand)\n\nStem nu: /mvp <naam>\n\n` + cmdLijst();
-}
-
-function scheduleMvpEnd(matchId) {
-  // Cancel bestaande mvp_end actions
-  db.prepare(`
-    UPDATE scheduled_actions
-    SET cancelled_at = ?
-    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NULL
-  `).run(nowMs(), matchId);
-
-  // Schedule nieuwe mvp_end action (2 uur later)
-  const mvpEndAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
-  db.prepare(`
-    INSERT INTO scheduled_actions (match_id, action_type, run_at, executed_at, cancelled_at, created_at)
-    VALUES (?, 'mvp_end', ?, NULL, NULL, ?)
-  `).run(matchId, mvpEndAt.toISOString(), nowMs());
-
-  console.log(`⏰ MVP voting eindigt om ${mvpEndAt.toTimeString().slice(0, 5)}`);
-}
-
-function isMvpVotingOpen(matchId) {
-  // Check of mvp_end action al is uitgevoerd
-  const executed = db.prepare(`
-    SELECT * FROM scheduled_actions
-    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NOT NULL
-  `).get(matchId);
-
-  return !executed;
-}
-
-function checkAndFinalizeMvpVoting(matchId) {
-  // Tel totaal aantal votes
-  const totalVotes = db.prepare(`
-    SELECT COUNT(*) as c FROM mvp_votes WHERE match_id = ?
-  `).get(matchId).c;
-
-  // Check of iemand 6+ votes heeft
-  const topVoter = db.prepare(`
-    SELECT voted_player_id, COUNT(*) as votes
-    FROM mvp_votes
-    WHERE match_id = ?
-    GROUP BY voted_player_id
-    ORDER BY votes DESC
-    LIMIT 1
-  `).get(matchId);
-
-  const hasWinner = topVoter && topVoter.votes >= 6;
-  const allVoted = totalVotes >= 10;
-
-  if (hasWinner || allVoted) {
-    return finalizeMvpVoting(matchId);
-  }
-
-  return null;
-}
-
-function finalizeMvpVoting(matchId) {
-  // Markeer mvp_end als uitgevoerd
-  db.prepare(`
-    UPDATE scheduled_actions
-    SET executed_at = ?
-    WHERE match_id = ? AND action_type = 'mvp_end' AND executed_at IS NULL
-  `).run(nowMs(), matchId);
-
-  // Bepaal MVP (meeste stemmen)
-  const winner = db.prepare(`
-    SELECT p.display_name, COUNT(*) as votes
-    FROM mvp_votes v
-    JOIN players p ON p.id = v.voted_player_id
-    WHERE v.match_id = ?
-    GROUP BY v.voted_player_id
-    ORDER BY votes DESC
-    LIMIT 1
-  `).get(matchId);
-
-  if (!winner) {
-    return '📊 *MVP Voting gesloten*\n\nGeen stemmen ontvangen.';
-  }
-
-  const totalVotes = db.prepare(`
-    SELECT COUNT(*) as c FROM mvp_votes WHERE match_id = ?
-  `).get(matchId).c;
-
-  return `🏆 *MVP Voting gesloten!*\n\n⭐ *${winner.display_name}* is de MVP met ${winner.votes}/${totalVotes} stemmen!`;
-}
-
-function cmdMvp(whatsappId, args) {
-    const m = db.prepare(`
-      SELECT * FROM matches WHERE status = 'closed' ORDER BY starts_at DESC LIMIT 1
-    `).get();
-
-    if (!m) throw new Error('Geen gesloten match gevonden. Voer eerst resultaat in met /witwon of /zwartwon.');
-
-    // Check of MVP voting nog open is
-    if (!isMvpVotingOpen(m.id)) {
-      throw new Error('MVP voting voor deze match is al gesloten.');
-    }
-
-    const player = db.prepare(`SELECT * FROM players WHERE whatsapp_id = ?`).get(whatsappId);
-    if (!player) {
-        throw new Error('Je WhatsApp nummer is nog niet gelinkt aan een speler.');
-    }
-
-    const wasinMatch = db.prepare(`
-      SELECT * FROM match_players WHERE match_id = ? AND player_id = ? AND is_waitlist = 0
-    `).get(m.id, player.id);
-
-    if (!wasinMatch) {
-      throw new Error('Je kan alleen stemmen voor MVP als je zelf in de match zat.');
-    }
-
-    const alreadyVoted = db.prepare(`
-      SELECT * FROM mvp_votes WHERE match_id = ? AND voter_player_id = ?
-    `).get(m.id, player.id);
-
-    if (alreadyVoted) {
-      throw new Error('Je hebt al gestemd voor MVP in deze match.');
-    }
-
-    const name = args.join(' ').trim();
-    if (!name) throw new Error('Gebruik: /mvp <naam>');
-
-    const votedPlayer = db.prepare(`SELECT * FROM players WHERE name_normalized = ?`).get(normalizeName(name));
-    if (!votedPlayer) throw new Error(`Speler "${name}" niet gevonden.`);
-
-    const votedWasInMatch = db.prepare(`
-      SELECT * FROM match_players WHERE match_id = ? AND player_id = ? AND is_waitlist = 0
-    `).get(m.id, votedPlayer.id);
-
-    if (!votedWasInMatch) {
-      throw new Error(`${votedPlayer.display_name} zat niet in deze match.`);
-    }
-
-    db.prepare(`
-      INSERT INTO mvp_votes (match_id, voter_player_id, voted_player_id, voted_at)
-      VALUES (?, ?, ?, ?)
-    `).run(m.id, player.id, votedPlayer.id, nowMs());
-
-    // Check of voting moet eindigen (10 votes of 6+ voor iemand)
-    const finalizeResult = checkAndFinalizeMvpVoting(m.id);
-    if (finalizeResult) {
-      return `✅ Je stemde voor *${votedPlayer.display_name}*!\n\n` + finalizeResult;
-    }
-
-    // Toon huidige stand
-    const votes = db.prepare(`
-      SELECT p.display_name, COUNT(*) as count
-      FROM mvp_votes v
-      JOIN players p ON p.id = v.voted_player_id
-      WHERE v.match_id = ?
-      GROUP BY v.voted_player_id
-      ORDER BY count DESC
-    `).all(m.id);
-
-    const totalVotes = votes.reduce((sum, v) => sum + v.count, 0);
-    const remaining = 10 - totalVotes;
-
-    let result = `✅ Stem geregistreerd: je stemde voor *${votedPlayer.display_name}* als MVP!`;
-    result += `\n\n📊 *Stand (${totalVotes}/10 stemmen):*\n`;
-    votes.forEach(v => {
-      const bar = '█'.repeat(v.count) + '░'.repeat(6 - v.count);
-      result += `${v.display_name}: ${bar} ${v.count}\n`;
-    });
-
-    if (remaining > 0) {
-      result += `\n⏳ Nog ${remaining} ${remaining === 1 ? 'stem' : 'stemmen'} of 6+ voor winnaar`;
-    }
-
-    return result;
-}
-
-function cmdMvps() {
-    const mvpPerMatch = db.prepare(`
-      SELECT v.match_id, v.voted_player_id, p.display_name, COUNT(*) as votes
-      FROM mvp_votes v
-      JOIN players p ON p.id = v.voted_player_id
-      GROUP BY v.match_id, v.voted_player_id
-      HAVING votes = (
-        SELECT MAX(vote_count) FROM (
-          SELECT COUNT(*) as vote_count FROM mvp_votes WHERE match_id = v.match_id GROUP BY voted_player_id
-        )
-      )
-    `).all();
-
-    if (mvpPerMatch.length === 0) {
-      return 'ℹ️ Nog geen MVP stemmen. Stem na een match met /mvp <naam>.';
-    }
-
-    const mvpCounts = {};
-    for (const r of mvpPerMatch) {
-      if (!mvpCounts[r.display_name]) mvpCounts[r.display_name] = 0;
-      mvpCounts[r.display_name]++;
-    }
-
-    const sorted = Object.entries(mvpCounts).sort((a, b) => b[1] - a[1]);
-    const lines = ['🏆 *MVP Leaderboard:*', ''];
-    sorted.slice(0, 10).forEach(([name, count], i) => {
-      lines.push(`${i + 1}. ${name} — ${count} MVP${count > 1 ? 's' : ''}`);
-    });
-
-    return lines.join('\n');
+    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\n` + cmdLijst();
 }
 
 function cmdLijst() {
@@ -1483,24 +1275,6 @@ async function executeDueActionsOnce() {
     if (!m) continue;
 
     let message = null;
-
-    // MVP end kan ook voor closed matches (dat is juist de bedoeling)
-    if (a.action_type === 'mvp_end') {
-      if (m.status === 'closed') {
-        message = finalizeMvpVoting(m.id);
-        console.log(`🏆 MVP VOTING CLOSED voor match ${m.id}`);
-      }
-      // Stuur bericht en ga door naar volgende action
-      if (message) {
-        try {
-          await client.sendMessage(CONFIG.WHATSAPP_GROUP_ID, message);
-          console.log(`✅ MVP bericht verzonden naar WhatsApp`);
-        } catch (err) {
-          console.error(`❌ Kan MVP bericht niet versturen:`, err);
-        }
-      }
-      continue;
-    }
 
     // Andere actions: skip cancelled/closed matches
     if (m.status === 'cancelled' || m.status === 'closed') continue;
