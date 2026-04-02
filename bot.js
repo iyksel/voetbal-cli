@@ -972,15 +972,21 @@ function cmdWin(team, args) {
     const m = getActiveMatch();
     if (!m) throw new Error('Geen actieve match.');
 
-    const wit = db.prepare(`
-      SELECT player_id FROM match_players WHERE match_id = ? AND team = 'wit'
+    const witPlayers = db.prepare(`
+      SELECT p.display_name, mp.player_id
+      FROM match_players mp
+      JOIN players p ON p.id = mp.player_id
+      WHERE mp.match_id = ? AND mp.team = 'wit'
     `).all(m.id);
 
-    const zwart = db.prepare(`
-      SELECT player_id FROM match_players WHERE match_id = ? AND team = 'zwart'
+    const zwartPlayers = db.prepare(`
+      SELECT p.display_name, mp.player_id
+      FROM match_players mp
+      JOIN players p ON p.id = mp.player_id
+      WHERE mp.match_id = ? AND mp.team = 'zwart'
     `).all(m.id);
 
-    if (wit.length === 0 || zwart.length === 0) {
+    if (witPlayers.length === 0 || zwartPlayers.length === 0) {
       throw new Error('Teams zijn nog niet gegenereerd. Gebruik eerst /teams.');
     }
 
@@ -999,8 +1005,8 @@ function cmdWin(team, args) {
       }
     }
 
-    const winners = team === 'wit' ? wit : zwart;
-    const losers = team === 'wit' ? zwart : wit;
+    const winners = team === 'wit' ? witPlayers : zwartPlayers;
+    const losers = team === 'wit' ? zwartPlayers : witPlayers;
 
     const tx = db.transaction(() => {
       for (const w of winners) {
@@ -1020,14 +1026,19 @@ function cmdWin(team, args) {
     });
     tx();
 
-    const teamLabel = team.charAt(0).toUpperCase() + team.slice(1);
-    const scoreText = score ? ` met ${score}` : '';
-    return `🏆 *Team ${teamLabel} heeft gewonnen${scoreText}!*\n\n` + cmdLijst();
+    // Format: *Winnaar1, Winnaar2, ...* score Verliezer1, Verliezer2, ...
+    const winnerNames = winners.map(p => p.display_name).join(', ');
+    const loserNames = losers.map(p => p.display_name).join(', ');
+    const scoreDisplay = score || '-';
+
+    const resultLine = `*${winnerNames}* ${scoreDisplay} ${loserNames}`;
+
+    return `🏆 ${resultLine}\n\n` + cmdLijst(m.id);
 }
 
-function cmdLijst() {
+function cmdLijst(matchId = null) {
     const rows = db.prepare(`
-      SELECT display_name, position, wins, games
+      SELECT id, display_name, position, wins, games
       FROM players
       WHERE games > 0
     `).all();
@@ -1044,19 +1055,43 @@ function cmdLijst() {
       return b.wins - a.wins; // Meer wins eerst
     });
 
-    const posLabel = (pos) => {
-      if (!pos) return '';
-      if (pos === 'keeper') return ' [K]';
-      if (pos === 'verdediger') return ' [V]';
-      if (pos === 'middenveld') return ' [M]';
-      if (pos === 'aanvaller') return ' [A]';
-      return '';
-    };
+    // Haal winnaars en verliezers op als matchId gegeven is
+    let winners = new Set();
+    let losers = new Set();
+
+    if (matchId) {
+      const matchResult = db.prepare(`SELECT winner_team FROM match_results WHERE match_id = ?`).get(matchId);
+      if (matchResult) {
+        const winnerPlayers = db.prepare(`
+          SELECT player_id FROM match_players
+          WHERE match_id = ? AND team = ?
+        `).all(matchId, matchResult.winner_team);
+
+        const loserTeam = matchResult.winner_team === 'wit' ? 'zwart' : 'wit';
+        const loserPlayers = db.prepare(`
+          SELECT player_id FROM match_players
+          WHERE match_id = ? AND team = ?
+        `).all(matchId, loserTeam);
+
+        winners = new Set(winnerPlayers.map(p => p.player_id));
+        losers = new Set(loserPlayers.map(p => p.player_id));
+      }
+    }
 
     const lines = ['📊 *Spelers Ranking:*', ''];
     rows.slice(0, 30).forEach((r, i) => {
       const pct = ((r.wins / r.games) * 100).toFixed(0);
-      lines.push(`${i + 1}. ${r.display_name} — ${pct}% (${r.wins}/${r.games})`);
+      let line = `${i + 1}. `;
+
+      if (winners.has(r.id)) {
+        line += `*${r.display_name}* 🟢↑ — ${pct}% (${r.wins}/${r.games})`;
+      } else if (losers.has(r.id)) {
+        line += `*${r.display_name}* 🔴↓ — ${pct}% (${r.wins}/${r.games})`;
+      } else {
+        line += `${r.display_name} — ${pct}% (${r.wins}/${r.games})`;
+      }
+
+      lines.push(line);
     });
 
     return lines.join('\n');
@@ -1252,6 +1287,31 @@ function cmdCancel() {
 
 // ==================== SCHEDULER (Automatische herinneringen) ====================
 
+/**
+ * Detecteer timezone offset voor Europa/Amsterdam
+ * Winter (CET): UTC+1
+ * Zomer (CEST): UTC+2
+ */
+function getEuropeAmsterdamOffset(date) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+
+  // Vereenvoudigde DST check: ruwweg eind maart tot eind oktober is zomertijd
+  // DST start: laatste zondag van maart
+  // DST eind: laatste zondag van oktober
+  if (month > 2 && month < 9) return '+02:00'; // April-September: zeker zomertijd
+  if (month > 9 || month < 2) return '+01:00'; // November-februari: zeker wintertijd
+
+  // Maart en oktober: afhankelijk van dag
+  if (month === 2) {
+    // Maart: vanaf dag 25 waarschijnlijk zomertijd
+    return day >= 25 ? '+02:00' : '+01:00';
+  }
+  // Oktober: tot dag 25 waarschijnlijk nog zomertijd
+  return day <= 25 ? '+02:00' : '+01:00';
+}
+
 function createActionsForMatch(matchId) {
   cancelAllActions(matchId);
 
@@ -1259,7 +1319,9 @@ function createActionsForMatch(matchId) {
   if (!m) return;
   if (m.status === 'cancelled' || m.status === 'closed') return;
 
-  const startsAt = new Date(`${m.match_date}T${m.starts_at}:00`);
+  // Parse tijd als Europe/Amsterdam timezone
+  const tzOffset = getEuropeAmsterdamOffset(new Date(m.match_date));
+  const startsAt = new Date(`${m.match_date}T${m.starts_at}:00${tzOffset}`);
 
   // Day message (bijv. om 9:00 op de dag zelf)
   const dayMsgAt = new Date(startsAt);
@@ -1267,6 +1329,9 @@ function createActionsForMatch(matchId) {
 
   // Reminder (bijv. 2 uur voor start)
   const reminderAt = new Date(startsAt.getTime() - CONFIG.reminderHoursBefore * 60 * 60 * 1000);
+
+  // Team reminder (30 minuten voor start)
+  const teamReminderAt = new Date(startsAt.getTime() - 30 * 60 * 1000);
 
   const ins = db.prepare(`
     INSERT INTO scheduled_actions (match_id, action_type, run_at, executed_at, cancelled_at, created_at)
@@ -1276,6 +1341,7 @@ function createActionsForMatch(matchId) {
   const createdAt = nowMs();
   ins.run(matchId, 'day_message', dayMsgAt.toISOString(), createdAt);
   ins.run(matchId, 'reminder', reminderAt.toISOString(), createdAt);
+  ins.run(matchId, 'team_reminder', teamReminderAt.toISOString(), createdAt);
   ins.run(matchId, 'start_check', startsAt.toISOString(), createdAt);
 
   console.log(`✅ Herinneringen gepland voor match ${matchId}`);
@@ -1354,6 +1420,18 @@ async function executeDueActionsOnce() {
       const needSure = Math.max(0, CONFIG.playerLimit - yes);
       message = `⏰ *Reminder: Nog ${CONFIG.reminderHoursBefore} uur!*\n\n✅ Zeker: ${yes}/${CONFIG.playerLimit}\n⚠️ Misschien: ${maybe}\n\n📌 Nog ${needSure} ${needSure === 1 ? 'persoon' : 'personen'} zeker nodig!`;
       console.log(`⏰ REMINDER voor match ${m.id}`);
+    }
+
+    if (a.action_type === 'team_reminder') {
+      const yes = countYes(m.id);
+      if (yes === CONFIG.playerLimit) {
+        // Teams genereren en sturen
+        message = `⚽ *Over 30 minuten!*\n\n` + formatTeams(m.id);
+        console.log(`⚽ TEAM REMINDER voor match ${m.id}`);
+      } else {
+        message = `⚽ *Over 30 minuten!*\n\n⚠️ Nog ${CONFIG.playerLimit - yes} spelers nodig voor teams!`;
+        console.log(`⚽ TEAM REMINDER (niet genoeg spelers) voor match ${m.id}`);
+      }
     }
 
     if (a.action_type === 'start_check') {
