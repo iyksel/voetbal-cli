@@ -35,9 +35,8 @@ const CONFIG = {
   reminderHoursBefore: 2,
   schedulerTickMs: 60000, // Check elke minuut
   schedulerBatch: 25,
-  // BELANGRIJK: Zet hier je WhatsApp groep ID
-  // Je kan dit zien in de console als je een bericht stuurt in de groep
-  WHATSAPP_GROUP_ID: null // Bijv: '1234567890-1234567890@g.us'
+  // BELANGRIJK: Alleen deze specifieke groep mag de bot gebruiken
+  WHATSAPP_GROUP_ID: '120363023093650812@g.us'
 };
 
 // ==================== ROLLEN & PERMISSIES ====================
@@ -124,14 +123,11 @@ client.on('message', async msg => {
     console.log("FROM:", msg.from);
     console.log("=====================");
 
-    // Auto-detect groep ID als nog niet ingesteld
-    if (!CONFIG.WHATSAPP_GROUP_ID && msg.from.endsWith('@g.us')) {
-        CONFIG.WHATSAPP_GROUP_ID = msg.from;
-        console.log(`✅ WhatsApp groep ID opgeslagen: ${CONFIG.WHATSAPP_GROUP_ID}`);
+    // ALLEEN berichten uit de specifieke voetbal groep
+    if (msg.from !== CONFIG.WHATSAPP_GROUP_ID) {
+        console.log(`⛔ Bericht genegeerd: verkeerde groep/privé (${msg.from})`);
+        return;
     }
-
-    // Alleen groepsberichten
-    if (!msg.from.endsWith('@g.us')) return;
 
     const text = msg.body.trim();
     const userName = msg._data.notifyName || 'Onbekend';
