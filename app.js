@@ -11,7 +11,7 @@ const db = new Database('voetbal.db');
 db.pragma('foreign_keys = ON');
 
 const DEFAULT_SCHEDULER_TICK_MS = 60000;
-const parsedSchedulerTickMs = Number.parseInt(process.env.SCHEDULER_TICK_MS || String(DEFAULT_SCHEDULER_TICK_MS), 10);
+const parsedSchedulerTickMs = Number.parseInt(process.env.SCHEDULER_TICK_MS || DEFAULT_SCHEDULER_TICK_MS, 10);
 
 const CONFIG = {
   playerLimit: 10,
