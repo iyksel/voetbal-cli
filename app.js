@@ -10,11 +10,13 @@ const readline = require('readline');
 const db = new Database('voetbal.db');
 db.pragma('foreign_keys = ON');
 
+const schedulerTickMs = Number.parseInt(process.env.SCHEDULER_TICK_MS || '60000', 10);
+
 const CONFIG = {
   playerLimit: 10,
   dayMessageHour: 9,
   reminderHoursBefore: 2,
-  schedulerTickMs: Number.parseInt(process.env.SCHEDULER_TICK_MS || '60000', 10) || 60000,
+  schedulerTickMs: Number.isNaN(schedulerTickMs) ? 60000 : schedulerTickMs,
   schedulerBatch: 25,
 };
 
