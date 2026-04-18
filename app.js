@@ -11,13 +11,15 @@ const db = new Database('voetbal.db');
 db.pragma('foreign_keys = ON');
 
 const DEFAULT_SCHEDULER_TICK_MS = 60000;
-const parsedSchedulerTickMs = Number.parseInt(process.env.SCHEDULER_TICK_MS || DEFAULT_SCHEDULER_TICK_MS, 10);
+const configuredSchedulerTickMs = process.env.SCHEDULER_TICK_MS
+  ? Number.parseInt(process.env.SCHEDULER_TICK_MS, 10)
+  : DEFAULT_SCHEDULER_TICK_MS;
 
 const CONFIG = {
   playerLimit: 10,
   dayMessageHour: 9,
   reminderHoursBefore: 2,
-  schedulerTickMs: Number.isNaN(parsedSchedulerTickMs) ? DEFAULT_SCHEDULER_TICK_MS : parsedSchedulerTickMs,
+  schedulerTickMs: Number.isNaN(configuredSchedulerTickMs) ? DEFAULT_SCHEDULER_TICK_MS : configuredSchedulerTickMs,
   schedulerBatch: 25,
 };
 
