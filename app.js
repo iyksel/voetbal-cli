@@ -14,7 +14,7 @@ const CONFIG = {
   playerLimit: 10,
   dayMessageHour: 9,
   reminderHoursBefore: 2,
-  schedulerTickMs: 2000,
+  schedulerTickMs: Math.max(5000, Number.parseInt(process.env.SCHEDULER_TICK_MS || '60000', 10) || 60000),
   schedulerBatch: 25,
 };
 
