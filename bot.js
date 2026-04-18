@@ -35,6 +35,7 @@ const CONFIG = {
   reminderHoursBefore: 2,
   schedulerTickMs: 60000, // Check elke minuut
   schedulerBatch: 25,
+  debugMessageLogs: process.env.DEBUG_MESSAGE_LOGS === '1',
   // BELANGRIJK: Alleen deze specifieke groep mag de bot gebruiken
   WHATSAPP_GROUP_ID: '120363023093650812@g.us'
 };
@@ -115,13 +116,15 @@ client.on('ready', () => {
 });
 
 client.on('message', async msg => {
-    console.log("=== DEBUG MESSAGE ===");
-    console.log("GROUP ID:", msg.from);
-    console.log("TEXT:", msg.body);
-    console.log("AUTHOR:", msg.author);
-    console.log("NOTIFY NAME:", msg._data.notifyName);
-    console.log("FROM:", msg.from);
-    console.log("=====================");
+    if (CONFIG.debugMessageLogs) {
+        console.log("=== DEBUG MESSAGE ===");
+        console.log("GROUP ID:", msg.from);
+        console.log("TEXT:", msg.body);
+        console.log("AUTHOR:", msg.author);
+        console.log("NOTIFY NAME:", msg._data.notifyName);
+        console.log("FROM:", msg.from);
+        console.log("=====================");
+    }
 
     // ALLEEN berichten uit de specifieke voetbal groep
     if (msg.from !== CONFIG.WHATSAPP_GROUP_ID) {
